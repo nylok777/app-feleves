@@ -19,8 +19,63 @@ public:
     __device__ T& operator()(int i, int j) { return m_data[(i * 3) + j]; }
     __device__ T operator()(int i, int j) const { return m_data[(i * 3) + j]; }
 
+    __device__ static Mat3 make_identity()
+    {
+        T data[9];
+        for (size_t i = 0; i < 9; ++i)
+            data[i] == (i % 4 == 0 ? T{1} : T{0});
+        return Mat3{data};
+    }
+
+    friend __device__ Mat3 operator*(const Mat3& mat, T n)
+    {
+        Mat3 out = mat;
+        for (auto& item : out.m_data)
+            item *= n;
+        return out;
+    }
+
+    friend __device__ Mat3 operator*(T n, const Mat3& mat) { return mat * n; }
+
+    friend __device__ Mat3 operator-(Mat3 lhs, const Mat3& rhs)
+    {
+        for (size_t i = 0; i < 9; ++i) {
+            lhs.m_data[i] -= rhs.m_data[i];
+        }
+        return lhs;
+    }
+
 private:
     T m_data[9];
+};
+
+template<int Order>
+struct step_result
+{
+    double3 y[Order];
+    double t;
+};
+
+template<>
+struct step_result<1>
+{
+    double3 y;
+    double t;
+};
+
+template<>
+struct step_result<2>
+{
+    double3 y_n;
+    double3 y;
+    double t;
+};
+
+struct solver_status
+{
+    double t_last;
+    size_t size;
+    bool finished;
 };
 
 class ProDrugPkParams {

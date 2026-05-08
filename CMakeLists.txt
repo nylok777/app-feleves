@@ -8,7 +8,8 @@ add_executable(app_feleves main.cu
         ldx.cuh
         numeric_funcs.cuh
         numeric.cuh
-        types.cu)
+        types.cu
+        numeric_funcs.cu)
 
 set_target_properties(app_feleves PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON)
