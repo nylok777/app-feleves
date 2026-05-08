@@ -6,6 +6,18 @@
 #define APP_FELEVES_NUMERIC_CUH
 #include "numeric_funcs.cuh"
 
+class NewtonRaphsonSystem
+{
+public:
+    NewtonRaphsonSystem(double errtol, int max_iter) : m_errtol(errtol), m_iters(max_iter) {}
+    template<typename SystemFn, typename JacobianFn>
+    __device__ double3 operator(double3 y, const SystemFn& sys_fn, const JacobianFn& jac_fn);
+
+private:
+    double m_errtol;
+    int m_iters;
+};
+
 template<typename SystemFn, typename JacobianFn>
 class NewtonRaphsonSystem {
 public:

@@ -4,6 +4,10 @@
 
 #ifndef APP_FELEVES_TYPES_CUH
 #define APP_FELEVES_TYPES_CUH
+#include <cuda/std/optional>
+
+template<typename T>
+using maybe = cuda::std::optional<T>;
 
 template<typename T>
     requires std::integral<T> || std::floating_point<T>
@@ -12,8 +16,8 @@ class Mat3
 public:
     Mat3() = default;
     __device__ explicit Mat3(const T* data) : m_data() { for (size_t i = 0; i < 9; ++i ) m_data[i] = data[i]; }
-    __device__ T& operator[](int i, int j) { return m_data[(i * 3) + j]; }
-    __device__ T operator[](int i, int j) const { return m_data[(i * 3) + j]; }
+    __device__ T& operator()(int i, int j) { return m_data[(i * 3) + j]; }
+    __device__ T operator()(int i, int j) const { return m_data[(i * 3) + j]; }
 
 private:
     T m_data[9];
@@ -58,5 +62,7 @@ struct MichaelisMentenParams {
     double v_max;
     double km;
 };
+
+using Double3x3 = Mat3<double>;
 
 #endif //APP_FELEVES_TYPES_CUH
