@@ -22,7 +22,8 @@ __device__ Mat3<double> jacobian(
 );
 
 struct LdxModel {
-    __device__ double3 operator()(const double3& y);
+    __device__ double3 operator()(const double3& y) const;
+    __device__ Double3x3 jac(const double3& y) const;
 
     ProDrugPkParams pk_params;
     MichaelisMentenParams mm_params;

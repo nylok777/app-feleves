@@ -16,6 +16,7 @@ class Mat3
 public:
     Mat3() = default;
     __device__ explicit Mat3(const T* data) : m_data() { for (size_t i = 0; i < 9; ++i ) m_data[i] = data[i]; }
+    __device__ explicit Mat3(T data[9]) : m_data() { memcpy(m_data, data, 9 * sizeof(T)); }
     __device__ T& operator()(int i, int j) { return m_data[(i * 3) + j]; }
     __device__ T operator()(int i, int j) const { return m_data[(i * 3) + j]; }
 
