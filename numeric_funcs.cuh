@@ -24,6 +24,11 @@ __host__ __device__ inline double3& operator+=(double3& lhs, const double3& rhs)
     return lhs;
 }
 
+__host__ __device__ inline double3 operator+(double3 lhs, const double3& rhs)
+{
+    return lhs += rhs;
+}
+
 __host__ __device__ inline double3 operator-(const double3& lhs, const double3& rhs)
 {
     return make_double3(lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z);
@@ -133,7 +138,7 @@ __device__ double3 bdf1_step(
 {
     auto nonlinear_eq = [&step_size, &sys_func, &y] __device__ (const double3& y_next) -> double3
     {
-        return y_next - y + (step_size * sys_func(y_next));
+        return y_next - y - (step_size * sys_func(y_next));
     };
     auto nonlinear_eq_jac = [&step_size, &jac_func] __device__ (const double3& y_next) -> Double3x3
     {
@@ -214,6 +219,7 @@ __device__ double3 bdf2_step(
         if (error_norm <= errtol) {
             step_accepted = true;
             t += h;
+            h_prev = h;
         }
 
         // Compute adaptive step size multiplier based on BDF2's O(h^3) local error
@@ -222,12 +228,7 @@ __device__ double3 bdf2_step(
         // Clamp the scaling to prevent erratic jumps in step size
         scale = fmax(min_scale, fmin(scale, max_scale));
 
-        if (step_accepted) {
-            h_prev = h;
-            h *= scale; // Scale up for the *next* step function call
-        } else {
-            h *= scale; // Scale down and retry the current step
-        }
+        h *= scale;
     }
 
     return y_next;

@@ -17,7 +17,7 @@ public:
           m_iters(max_iter) {}
 
     template<typename SystemFn, typename JacobianFn>
-    __device__ maybe<double3> operator()(double3 y, const SystemFn& sys_fn, const JacobianFn& jac_fn)
+    __device__ maybe<double3> operator()(double3 y, const SystemFn& sys_fn, const JacobianFn& jac_fn) const
     {
         return newton_raphson_system(std::move(y), sys_fn, jac_fn, m_errtol, m_iters);
     }
@@ -120,9 +120,9 @@ template<typename F, typename J, typename R>
 class BackwardEuler
 {
 public:
-    BackwardEuler(double errtol, double step_size, F system_fn, J jacobian_fn, R root_solver, double t0 = 0.0)
+    BackwardEuler(double errtol, double step_size, double output_interval, F system_fn, J jacobian_fn, R root_solver, double t0 = 0.0)
         : m_stepper(errtol, step_size, std::move(system_fn), std::move(jacobian_fn), std::move(root_solver)),
-          m_t(t0) {}
+          m_out_interval(output_interval), m_t(t0) {}
 
     __device__ solver_status operator()(
         const double3& y0, double t0, double h, double t_end, double3* y_out, double* t_out, size_t size, size_t start_step = 0)
@@ -133,21 +133,23 @@ public:
     }
 
     __device__ solver_status operator()(
-        const double3& y0, double t_end, double3* y_out, double* t_out, size_t size, size_t start_step = 0)
+        const double3& y0, double t_end, double3* y_out, size_t size, size_t start_step = 0)
     {
-        size_t step = start_step;
-        y_out[step] = y0;
-        t_out[step++] = m_t;
-        while (m_t < t_end && step < size) {
-            if (m_t + m_stepper.step_size())
-                m_stepper.set_step_size(t_end - m_t);
-
-            auto res = m_stepper(y_out[step - 1], m_t);
-            m_t = res.t;
-            t_out[step] = m_t;
-            y_out[step++] = res.y;
+        size_t save_idx = start_step;
+        double t_save = m_out_interval;
+        y_out[save_idx] = y0;
+        auto y_curr = y0;
+        while (m_t < t_end && save_idx < size) {
+            auto [y_next, t] = m_stepper(y_curr, m_t);
+            while (t >= t_save && save_idx < size) {
+                double theta = t == m_t ? 1.0 : (t_save - m_t) / (t - m_t);
+                y_out[++save_idx] = y_curr + ((y_next - y_curr) * theta);
+                t_save += m_out_interval;
+            }
+            y_curr = y_next;
+            m_t = t;
         }
-        return {m_t, step, m_t >= t_end};
+        return {m_t, save_idx, m_t >= t_end};
     }
 
     __device__ step_result<1> step(const double3& y)
@@ -159,6 +161,7 @@ public:
 
 private:
     BackwardEulerStep<F, J, R> m_stepper;
+    double m_out_interval;
     mutable double m_t;
 };
 
