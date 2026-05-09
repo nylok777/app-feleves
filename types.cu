@@ -6,30 +6,44 @@
 #include "types.cuh"
 #include "numeric_funcs.cuh"
 
-ProDrugPkParams::ProDrugPkParams(double bioavail, double hl, double tmax, ActiveDrug active)
-    : m_parent(active), m_bio(bioavail), m_t_half(hl), m_t_max(tmax), m_elim(log(2) / hl)
+ProDrugPkParams::ProDrugPkParams(double bioavail, double hl, double tmax, double elim_rate, double abs_rate, ActiveDrug active)
+    : m_parent(active), m_bio(bioavail), m_t_half(hl), m_t_max(tmax), m_elim(elim_rate), m_abs(abs_rate)
 {
-    auto f = [this](const double ka)
-    {
-        return log(ka) - log(m_elim) - m_t_max * (ka - m_elim);
-    };
-    auto df = [this](const double ka)
-    {
-        return (1 / ka) - m_t_max;
-    };
-    m_abs = newton_raphson((1 / m_t_max) + m_elim, f, df, 1e-7, 100);
 }
 
-ProDrugPkParams::ActiveDrug::ActiveDrug(double pb, double hl, double tmax)
-    : m_pb(pb), m_t_half(hl), m_t_max(tmax), m_elim(log(2) / hl)
+__host__ __device__ maybe<ProDrugPkParams> ProDrugPkParams::make(double bioavail, double hl, double tmax, ActiveDrug active)
 {
-    auto f = [this](const double ka)
+    auto elim_rate = log(2) / hl;
+    auto f = [=](const double ka)
     {
-        return log(ka) - log(m_elim) - m_t_max * (ka - m_elim);
+        return log(ka) - log(elim_rate) - tmax * (ka - elim_rate);
     };
-    auto df = [this](const double ka)
+    auto df = [=](const double ka)
     {
-        return (1 / ka) - m_t_max;
+        return (1 / ka) - tmax;
     };
-    m_form = newton_raphson((1 / m_t_max) + m_elim, f, df, 1e-7, 100);
+    auto abs_rate = newton_raphson((1 / tmax) + elim_rate, f, df, 1e-7, 100);
+    if (!abs_rate.has_value()) return {};
+    return ProDrugPkParams{bioavail, hl, tmax, elim_rate, abs_rate.value(), std::move(active)};
+}
+
+__host__ __device__ maybe<ProDrugPkParams::ActiveDrug> ProDrugPkParams::ActiveDrug::make(double pb, double hl, double tmax)
+{
+    auto elim_rate = log(2) / hl;
+    auto f = [=](const double ka)
+    {
+        return log(ka) - log(elim_rate) - tmax * (ka - elim_rate);
+    };
+    auto df = [=](const double ka)
+    {
+        return (1 / ka) - tmax;
+    };
+    auto form_rate = newton_raphson((1 / tmax) + elim_rate, f, df, 1e-7, 100);
+    if (!form_rate.has_value()) return {};
+    return ActiveDrug{pb, hl, tmax, elim_rate, form_rate.value()};
+}
+
+ProDrugPkParams::ActiveDrug::ActiveDrug(double pb, double hl, double tmax, double elim_rate, double form_rate)
+    : m_pb(pb), m_t_half(hl), m_t_max(tmax), m_elim(elim_rate), m_form(form_rate)
+{
 }
