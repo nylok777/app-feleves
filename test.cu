@@ -44,7 +44,7 @@ TEST_F(NewtonRaphsonTest, Call)
     cudaFree(dev_y);
 }
 
-class NewtonRaphsonSystemTest : public testing::Test
+class NewtonRaphsonSystemTest : public testing::TestWithParam<std::pair<double3, double3>>
 {
 public:
     struct F
@@ -75,7 +75,7 @@ public:
     };
 
 protected:
-    static constexpr double errtol = 1e-7;
+    static constexpr double errtol = 1e-10;
     NewtonRaphsonSystem newton;
 
     NewtonRaphsonSystemTest() : newton(errtol, 1000) {}
@@ -87,20 +87,30 @@ __global__ void test_kernel_newton_system(NS newton, F f, J j, double3 x0, maybe
     *result = newton(x0, f, j);
 }
 
-TEST_F(NewtonRaphsonSystemTest, CallRoot1)
+TEST_P(NewtonRaphsonSystemTest, FindRoot)
 {
-    auto x0 = make_double3(1.0, 1.0, 1.0);
-    auto root = make_double3(0.0, 0.0, 0.0);
+    auto [x0, root] = GetParam();
     maybe<double3>* dev_result = nullptr;
     cudaMalloc(&dev_result, sizeof(maybe<double3>));
     test_kernel_newton_system<<<1, 1>>>(newton, F{}, J{}, x0, dev_result);
     auto* result = new maybe<double3>;
     cudaMemcpy(result, dev_result, sizeof(maybe<double3>), cudaMemcpyDeviceToHost);
     ASSERT_TRUE(result->has_value());
-    EXPECT_DOUBLE_EQ(result->value().x, root.x);
-    EXPECT_DOUBLE_EQ(result->value().y, root.y);
-    EXPECT_DOUBLE_EQ(result->value().z, root.z);
+
+    constexpr double rtol = 1e-8;
+    auto eps = root.x + root.y + root.z == 0.0 ? make_double3(errtol, errtol, errtol) : (rtol + errtol) * d3abs(result->value());
+    EXPECT_LE(std::fabs(result->value().x - root.x), eps.x);
+    EXPECT_LE(std::fabs(result->value().y - root.y), eps.y);
+    EXPECT_LE(std::fabs(result->value().z - root.z), eps.z);
+
     std::cout << "x: " << result->value().x << "\ty: " << result->value().y << "\tz: " << result->value().z << '\n';
+
     delete result;
     cudaFree(dev_result);
 }
+
+INSTANTIATE_TEST_SUITE_P(LorenzRoots,
+    NewtonRaphsonSystemTest,
+    testing::Values(std::make_pair(make_double3(1.0, 1.0, 1.0), make_double3(0., 0., 0.)),
+        std::make_pair(make_double3(10., 10., 30.), make_double3(8.48528137, 8.48528137, 27.0)),
+        std::make_pair(make_double3(-10., -10., 30.), make_double3(-8.48528137, -8.48528137, 27.0))));
