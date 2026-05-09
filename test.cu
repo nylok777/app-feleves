@@ -128,23 +128,6 @@ protected:
 };
 
 template<typename S>
-__global__ void test_kernel_bdf1_step(double3 x, step_result<1>* result, S solver)
-{
-    *result = solver.step(x);
-}
-
-TEST_F(BDFTest, Order1Step)
-{
-    auto x0 = make_double3(1., 1., 1.);
-    step_result<1>* dev_result = nullptr;
-    cudaMalloc(&dev_result, sizeof(step_result<1>));
-    test_kernel_bdf1_step<<<1, 1>>>(x0, dev_result, backward_euler);
-    step_result<1> result{};
-    auto err = cudaMemcpy(&result, dev_result, sizeof(step_result<1>), cudaMemcpyDeviceToHost);
-    ASSERT_EQ(err, cudaSuccess);
-}
-
-template<typename S>
 __global__ void test_kernel_bdf(S solver, double3 x0, double t_end, double3* y_out, size_t size, solver_status* status)
 {
     *status = solver(x0, t_end, y_out, size);

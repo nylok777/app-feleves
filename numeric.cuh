@@ -125,44 +125,39 @@ public:
           m_out_interval(output_interval), m_t(t0) {}
 
     __device__ solver_status operator()(
-        const double3& y0, double t0, double h, double t_end, double3* y_out, double* t_out, size_t size, size_t start_step = 0)
-    {
-        m_t = t0;
-        m_stepper.set_step_size(h);
-        return (*this)(y0, t_end, y_out, t_out, size, start_step);
-    }
-
-    __device__ solver_status operator()(
         const double3& y0, double t_end, double3* y_out, size_t size, size_t start_step = 0)
     {
         size_t save_idx = start_step;
-        double t_save = m_out_interval;
         y_out[save_idx] = y0;
-        auto y_curr = y0;
+        m_y = y0;
         while (m_t < t_end && save_idx < size) {
-            auto [y_next, t] = m_stepper(y_curr, m_t);
-            while (t >= t_save && save_idx < size) {
-                double theta = t == m_t ? 1.0 : (t_save - m_t) / (t - m_t);
-                y_out[++save_idx] = y_curr + ((y_next - y_curr) * theta);
-                t_save += m_out_interval;
-            }
-            y_curr = y_next;
-            m_t = t;
+            step(y_out, save_idx, size);
         }
         return {m_t, save_idx, m_t >= t_end};
     }
 
-    __device__ step_result<1> step(const double3& y)
+    __device__ void step(double3* y_out, size_t& idx, size_t size)
     {
-        auto res = m_stepper(y, m_t);
-        m_t = res.t;
-        return res;
+        auto [y_next, t_next] = m_stepper(m_y, m_t);
+        interpolate(t_next, y_next, idx, size, y_out);
+        m_y = y_next;
+        m_t = t_next;
     }
 
 private:
+    __device__ void interpolate(double t_next, const double3& y_next, size_t& save_idx, size_t size, double3* y_out) const
+    {
+        while (t_next >= m_t_save && save_idx < size) {
+            double theta = t_next == m_t ? 1.0 : (m_t_save - m_t) / (t_next - m_t);
+            y_out[++save_idx] = m_y + ((y_next - m_y) * theta);
+            m_t_save += m_out_interval;
+        }
+    }
     BackwardEulerStep<F, J, R> m_stepper;
+    mutable double3 m_y{};
     double m_out_interval;
     mutable double m_t;
+    mutable double m_t_save = m_out_interval;
 };
 
 template<typename G, typename F>
