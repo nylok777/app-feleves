@@ -91,7 +91,7 @@ public:
         __host__ __device__ double form_rate_c() const { return m_form; }
 
     private:
-        ActiveDrug(double pb, double hl, double tmax, double elim_rate, double form_rate);
+        __host__ __device__ ActiveDrug(double pb, double hl, double tmax, double elim_rate, double form_rate);
         double m_pb;
         double m_t_half;
         double m_t_max;
@@ -107,7 +107,7 @@ public:
     __host__ __device__ double abs_rate_c() const { return m_abs; }
 
 private:
-    ProDrugPkParams(double bioavail, double hl, double tmax, double elim_rate, double abs_rate, ActiveDrug active);
+    __host__ __device__ ProDrugPkParams(double bioavail, double hl, double tmax, double elim_rate, double abs_rate, ActiveDrug active);
     ActiveDrug m_parent;
     double m_bio;
     double m_t_half;

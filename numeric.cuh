@@ -9,7 +9,6 @@
 
 namespace cg = cooperative_groups;
 
-template<>
 class NewtonRaphsonSystem
 {
 public:
@@ -24,32 +23,6 @@ public:
     }
 
 private:
-    double m_errtol;
-    int m_iters;
-};
-
-template<typename SystemFn, typename JacobianFn>
-class NewtonRaphsonSystem
-{
-public:
-    NewtonRaphsonSystem(
-        const SystemFn& sys_fn,
-        const JacobianFn& jac_fn,
-        double errtol,
-        int max_iter)
-        : m_system_fn(sys_fn),
-          m_jacobian_fn(jac_fn),
-          m_errtol(errtol),
-          m_iters(max_iter) {}
-
-    __device__ maybe<double3> operator()(double3 y)
-    {
-        return newton_raphson_system(std::move(y), m_system_fn, m_jacobian_fn, m_errtol, m_iters);
-    }
-
-private:
-    SystemFn m_system_fn;
-    JacobianFn m_jacobian_fn;
     double m_errtol;
     int m_iters;
 };

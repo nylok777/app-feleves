@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 4.2)
-project(app_feleves CUDA)
+project(app_feleves LANGUAGES CUDA CXX)
 
 set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CXX_STANDARD 20)
+
+find_package(GTest REQUIRED)
 
 add_executable(app_feleves main.cu
         types.cuh
@@ -9,8 +12,19 @@ add_executable(app_feleves main.cu
         numeric_funcs.cuh
         numeric.cuh
         types.cu
-        numeric_funcs.cu
         ldx.cu)
 
 set_target_properties(app_feleves PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON)
+
+target_link_libraries(app_feleves m)
+
+add_executable(app_feleves_test test.cu
+        types.cuh
+        numeric_funcs.cuh
+        ldx.cuh
+        types.cu
+        numeric.cuh
+        ldx.cu)
+
+target_link_libraries(app_feleves_test GTest::gtest GTest::gtest_main)
