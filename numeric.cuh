@@ -65,18 +65,20 @@ public:
           m_prev_step_size(step_size),
           m_step_size(step_size) {}
 
-    __device__ step_result<2> operator()(const double3& y0, double t0)
+    __device__ step_result operator()(const double3& y0, double t0, double& t1, double3& y1)
     {
-        auto t = t0;
-        auto y = bdf1_step(y0, t, m_errtol, m_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
-        auto y_next = bdf2_step(y, t, m_step_size, m_errtol, y0, m_prev_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
-        return {std::move(y), std::move(y_next), t};
+        t1 = t0;
+        y1 = bdf1_step(y0, t1, m_errtol, m_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
+        auto t2 = t1;
+        auto y_next = bdf2_step(y1, t2, m_step_size, m_errtol, y0, m_prev_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
+        return {std::move(y_next), t2};
     }
 
-    __device__ step_result<2> operator()(const double3& y_prev, const double3& y, double t)
+    __device__ step_result operator()(const double3& y_prev, const double3& y, double t)
     {
-        auto y_next = bdf2_step(y, t, m_step_size, m_errtol, y_prev, m_prev_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
-        return {y, std::move(y_next), t};
+        auto t_next = t;
+        auto y_next = bdf2_step(y, t_next, m_step_size, m_errtol, y_prev, m_prev_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
+        return {std::move(y_next), t_next};
     }
 
 private:
@@ -86,6 +88,69 @@ private:
     double m_errtol;
     mutable double m_prev_step_size;
     mutable double m_step_size;
+};
+
+
+template<typename F, typename J, typename R>
+class BDF2
+{
+public:
+    BDF2(F sys_fn, J jac_fn, R root_solver, double errtol, double step_size, double out_interval, double t0 = 0.0)
+        :
+        m_stepper(errtol, step_size, std::move(sys_fn), std::move(jac_fn), std::move(root_solver)),
+        m_t(t0),
+        m_t_prev(t0),
+        m_out_interval(out_interval) {}
+
+    __device__ solver_status operator()(const double3& y0, double t_end, double3* y_out, size_t size, size_t start_idx = 0)
+    {
+        size_t save_idx = start_idx;
+
+        step(y0, y_out, save_idx, size);
+
+        while (m_t < t_end && save_idx < size) {
+            step(y_out, save_idx, size);
+        }
+        return {m_t, save_idx, m_t >= t_end};
+    }
+
+    __device__ void step(const double3& y0, double3* y_out, size_t& idx, size_t size)
+    {
+        y_out[idx] = y0;
+        auto [y_next, t_next] = m_stepper(y0, m_t_prev, m_t, m_y);
+
+        while (t_next >= m_t_save && idx < size) {
+            y_out[++idx] = linear_interpolation(m_y, y_next, m_t, t_next, m_t_save);
+            m_t_save += m_out_interval;
+        }
+        m_t_prev = m_t;
+        m_t = t_next;
+        m_y_prev = m_y;
+        m_y = y_next;
+    }
+
+    __device__ void step(double3* y_out, size_t& idx, size_t size)
+    {
+        auto [y_next, t_next] = m_stepper(m_y_prev, m_y, m_t);
+
+        while (t_next >= m_t_save && idx < size) {
+            y_out[++idx] = quadratic_interpolation(m_y_prev, m_y, y_next, m_t_prev, m_t, t_next, m_t_save);
+            m_t_save += m_out_interval;
+        }
+        m_y_prev = m_y;
+        m_y = y_next;
+        m_t_prev = m_t;
+        m_t = t_next;
+    }
+
+private:
+    BDF2Step<F, J, R> m_stepper;
+    mutable double3 m_y_prev{};
+    mutable double3 m_y{};
+    mutable double m_t;
+    mutable double m_t_prev;
+    double m_out_interval;
+    mutable double m_t_save = m_out_interval;
 };
 
 template<typename F, typename J, typename R>
@@ -99,7 +164,7 @@ public:
           m_errtol(errtol),
           m_step_size(step_size) {}
 
-    __device__ step_result<1> operator()(const double3& y, double t) const
+    __device__ step_result operator()(const double3& y, double t) const
     {
         auto res = bdf1_step(y, t, m_errtol, m_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
         return {std::move(res), t};
@@ -125,9 +190,9 @@ public:
           m_out_interval(output_interval), m_t(t0) {}
 
     __device__ solver_status operator()(
-        const double3& y0, double t_end, double3* y_out, size_t size, size_t start_step = 0)
+        const double3& y0, double t_end, double3* y_out, size_t size, size_t start_idx = 0)
     {
-        size_t save_idx = start_step;
+        size_t save_idx = start_idx;
         y_out[save_idx] = y0;
         m_y = y0;
         while (m_t < t_end && save_idx < size) {
@@ -136,23 +201,25 @@ public:
         return {m_t, save_idx, m_t >= t_end};
     }
 
+    __device__ void step(const double3& y0, double3* y_out, size_t& idx, size_t size)
+    {
+        m_y = y0;
+        y_out[idx] = y0;
+        step(y_out, idx, size);
+    }
+
     __device__ void step(double3* y_out, size_t& idx, size_t size)
     {
         auto [y_next, t_next] = m_stepper(m_y, m_t);
-        interpolate(t_next, y_next, idx, size, y_out);
+        while (t_next >= m_t_save && idx < size) {
+            y_out[++idx] = linear_interpolation(m_y, y_next, m_t, t_next, m_t_save);
+            m_t_save += m_out_interval;
+        }
         m_y = y_next;
         m_t = t_next;
     }
 
 private:
-    __device__ void interpolate(double t_next, const double3& y_next, size_t& save_idx, size_t size, double3* y_out) const
-    {
-        while (t_next >= m_t_save && save_idx < size) {
-            double theta = t_next == m_t ? 1.0 : (m_t_save - m_t) / (t_next - m_t);
-            y_out[++save_idx] = m_y + ((y_next - m_y) * theta);
-            m_t_save += m_out_interval;
-        }
-    }
     BackwardEulerStep<F, J, R> m_stepper;
     mutable double3 m_y{};
     double m_out_interval;

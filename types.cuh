@@ -50,24 +50,8 @@ private:
     T m_data[9];
 };
 
-template<int Order>
 struct step_result
 {
-    double3 y[Order];
-    double t;
-};
-
-template<>
-struct step_result<1>
-{
-    double3 y;
-    double t;
-};
-
-template<>
-struct step_result<2>
-{
-    double3 y_n;
     double3 y;
     double t;
 };

@@ -233,4 +233,24 @@ __device__ double3 bdf2_step(
 
     return y_next;
 }
+
+__device__ inline double3 linear_interpolation(const double3& y, const double3& y_next, double t, double t_next, double t_save)
+{
+    double theta = t_next == t ? 1.0 : (t_save - t) / (t_next - t);
+    return y + ((y_next - y) * theta);
+}
+
+__device__ inline double3 quadratic_interpolation(
+    const double3& y0, const double3& y1, const double3& y2,
+    double t0, double t1, double t2,
+    double t_out)
+{
+    // Calculate the Lagrange basis weights
+    double w0 = ((t_out - t1) * (t_out - t2)) / ((t0 - t1) * (t0 - t2));
+    double w1 = ((t_out - t0) * (t_out - t2)) / ((t1 - t0) * (t1 - t2));
+    double w2 = ((t_out - t0) * (t_out - t1)) / ((t2 - t0) * (t2 - t1));
+
+    // Combine
+    return (y0 * w0) + (y1 * w1) + (y2 * w2);
+}
 #endif //APP_FELEVES_NUMERIC_FUNCS_CUH
