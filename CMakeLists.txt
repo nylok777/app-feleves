@@ -27,4 +27,8 @@ add_executable(app_feleves_test test.cu
         numeric.cuh
         ldx.cu)
 
+target_compile_options(app_feleves_test PRIVATE
+        "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:--ptxas-options=-v>"
+)
+
 target_link_libraries(app_feleves_test GTest::gtest GTest::gtest_main)

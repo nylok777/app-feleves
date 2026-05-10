@@ -90,69 +90,6 @@ private:
     mutable double m_step_size;
 };
 
-
-template<typename F, typename J, typename R>
-class BDF2
-{
-public:
-    BDF2(F sys_fn, J jac_fn, R root_solver, double errtol, double step_size, double out_interval, double t0 = 0.0)
-        :
-        m_stepper(errtol, step_size, std::move(sys_fn), std::move(jac_fn), std::move(root_solver)),
-        m_t(t0),
-        m_t_prev(t0),
-        m_out_interval(out_interval) {}
-
-    __device__ solver_status operator()(const double3& y0, double t_end, double3* y_out, size_t size, size_t start_idx = 0)
-    {
-        size_t save_idx = start_idx;
-
-        step(y0, y_out, save_idx, size);
-
-        while (m_t < t_end && save_idx < size) {
-            step(y_out, save_idx, size);
-        }
-        return {m_t, save_idx, m_t >= t_end};
-    }
-
-    __device__ void step(const double3& y0, double3* y_out, size_t& idx, size_t size)
-    {
-        y_out[idx] = y0;
-        auto [y_next, t_next] = m_stepper(y0, m_t_prev, m_t, m_y);
-
-        while (t_next >= m_t_save && idx < size) {
-            y_out[++idx] = linear_interpolation(m_y, y_next, m_t, t_next, m_t_save);
-            m_t_save += m_out_interval;
-        }
-        m_t_prev = m_t;
-        m_t = t_next;
-        m_y_prev = m_y;
-        m_y = y_next;
-    }
-
-    __device__ void step(double3* y_out, size_t& idx, size_t size)
-    {
-        auto [y_next, t_next] = m_stepper(m_y_prev, m_y, m_t);
-
-        while (t_next >= m_t_save && idx < size) {
-            y_out[++idx] = quadratic_interpolation(m_y_prev, m_y, y_next, m_t_prev, m_t, t_next, m_t_save);
-            m_t_save += m_out_interval;
-        }
-        m_y_prev = m_y;
-        m_y = y_next;
-        m_t_prev = m_t;
-        m_t = t_next;
-    }
-
-private:
-    BDF2Step<F, J, R> m_stepper;
-    mutable double3 m_y_prev{};
-    mutable double3 m_y{};
-    mutable double m_t;
-    mutable double m_t_prev;
-    double m_out_interval;
-    mutable double m_t_save = m_out_interval;
-};
-
 template<typename F, typename J, typename R>
 class BackwardEulerStep
 {
@@ -190,99 +127,174 @@ public:
           m_out_interval(output_interval), m_t(t0) {}
 
     __device__ solver_status operator()(
-        const double3& y0, double t_end, double3* y_out, size_t size, size_t start_idx = 0)
+        const double3& y0, double t0, double h, double t_end, double3* y_out, double* t_out, size_t size, size_t start_step = 0)
     {
-        size_t save_idx = start_idx;
+        m_t = t0;
+        m_stepper.set_step_size(h);
+        return (*this)(y0, t_end, y_out, t_out, size, start_step);
+    }
+
+    __device__ solver_status operator()(
+        const double3& y0, double t_end, double3* y_out, size_t size, size_t start_step = 0)
+    {
+        size_t save_idx = start_step;
+        double t_save = m_out_interval;
         y_out[save_idx] = y0;
-        m_y = y0;
+        auto y_curr = y0;
         while (m_t < t_end && save_idx < size) {
-            step(y_out, save_idx, size);
+            auto [y_next, t] = m_stepper(y_curr, m_t);
+            while (t >= t_save && save_idx < size) {
+                double theta = t == m_t ? 1.0 : (t_save - m_t) / (t - m_t);
+                y_out[++save_idx] = y_curr + ((y_next - y_curr) * theta);
+                t_save += m_out_interval;
+            }
+            y_curr = y_next;
+            m_t = t;
         }
         return {m_t, save_idx, m_t >= t_end};
     }
 
-    __device__ void step(const double3& y0, double3* y_out, size_t& idx, size_t size)
-    {
-        m_y = y0;
-        y_out[idx] = y0;
-        step(y_out, idx, size);
-    }
+private:
+    BackwardEulerStep<F, J, R> m_stepper;
+    double m_out_interval;
+    mutable double m_t;
+};
 
-    __device__ void step(double3* y_out, size_t& idx, size_t size)
+template<typename F, typename J, typename R>
+class Parareal
+{
+public:
+    Parareal(BackwardEulerStep<F,J,R> coarse_stepper, BDF2Step<F,J,R> fine_stepper, double errtol, double t_save, int max_iters)
+        :
+        m_coarse_stepper(std::move(coarse_stepper)),
+        m_fine_stepper(std::move(fine_stepper)),
+        m_errtol(errtol),
+        m_t_save(t_save),
+        m_max_iters(max_iters) {}
+
+    __device__ void operator()(const double3& y0, const double t0, const double tf, double3* y_out, double3* f_values, double3* g_values,
+        bool* converged)
     {
-        auto [y_next, t_next] = m_stepper(m_y, m_t);
-        while (t_next >= m_t_save && idx < size) {
-            y_out[++idx] = linear_interpolation(m_y, y_next, m_t, t_next, m_t_save);
-            m_t_save += m_out_interval;
+        cg::grid_group group = cg::this_grid();
+        const auto tid = group.thread_rank();
+        const auto group_size = group.size();
+
+        double t_curr;
+        double3 y_curr;
+
+        if (tid == 0) {
+            *converged = false;
+            size_t idx = 0;
+            double t_out = m_t_save;
+            t_curr = t0;
+            y_curr = y0;
+            y_out[idx] = y0;
+            while (t_curr < tf && idx < group_size) {
+                auto [y_next, t_next] = m_coarse_stepper(y_curr, t_curr);
+                while (t_out < t_next && idx < group_size) {
+                    y_out[++idx] = linear_interpolation(y_curr, y_next, t_curr, t_next, t_out);
+                    t_out += m_t_save;
+                }
+                y_curr = y_next;
+                t_curr = t_next;
+            }
         }
-        m_y = y_next;
-        m_t = t_next;
+
+        group.sync();
+
+        double t_prev = 0.0;
+        double3 y_prev;
+        if (tid > 0) {
+            t_prev = m_t_save * static_cast<double>(tid - 1);
+            y_prev = y_out[tid - 1];
+        }
+        t_curr = m_t_save * static_cast<double>(tid);
+        y_curr = y_out[tid];
+
+        for (int k = 0; !*converged && k < m_max_iters; ++k) {
+            if (tid < group_size) {
+                double3 y_n = y_curr, y = y_curr;
+                double t_n = t_curr, t = t_curr;
+
+                auto res = m_fine_stepper(y_curr, t_curr, t, y);
+                double3 y_next = std::move(res.y);
+                double t_next = res.t;
+
+                while (t < t_curr + m_t_save) {
+                    if (t_next <= t) {
+                        f_values[tid] = y_next;
+                        break;
+                    }
+
+                    // FIX 2: Check if this is the first step of the slice (t_n == t_curr)
+                    if (t_n == t_curr && t_next >= t_curr + m_t_save) {
+                        f_values[tid] = linear_interpolation(y, y_next, t, t_next, t_curr + m_t_save);
+                        break;
+                    }
+                    if (t_next >= t_curr + m_t_save) {
+                        f_values[tid] = quadratic_interpolation(y_n, y, y_next, t_n, t, t_next, t_curr + m_t_save);
+                        break;
+                    }
+
+                    res = m_fine_stepper(y, y_next, t_next);
+                    y_n = y;
+                    y = y_next;
+                    y_next = std::move(res.y);
+                    t_n = t;
+                    t = t_next;
+                    t_next = res.t;
+                }
+            }
+
+            group.sync();
+
+            if (tid == 0) {
+                double max_error = 0.0;
+
+                for (size_t i = 0; i < group_size; ++i) {
+                    auto y_old = y_out[i + 1];
+                    double t_slice = static_cast<double>(i) * m_t_save;
+                    double t_cg = t_slice;
+                    double3 y_cg = y_out[i];
+                    double3 g_new_y;
+
+                    while (t_cg < t_slice + m_t_save) {
+                        auto [y_next, t_next] = m_coarse_stepper(y_cg, t_cg);
+                        if (t_next <= t_cg) {
+                            g_new_y = y_next;
+                            break;
+                        }
+                        if (t_next >= t_slice + m_t_save) {
+                            g_new_y = linear_interpolation(y_cg, y_next, t_cg, t_next, t_slice + m_t_save);
+                            break;
+                        }
+                        y_cg = y_next;
+                        t_cg = t_next;
+                    }
+
+                    y_out[i + 1] = g_new_y + f_values[i] - g_values[i];
+                    g_values[i] = g_new_y;
+                    auto error = d3abs(y_out[i + 1] - y_old);
+                    max_error = fmax(max_error, fmax(error.x, fmax(error.y, error.z)));
+                }
+                *converged = max_error < m_errtol;
+            }
+
+            group.sync();
+
+            if (tid > 0 && tid < group_size)
+                y_prev = y_out[tid - 1];
+            y_curr = y_out[tid];
+        }
+        group.sync();
     }
 
 private:
-    BackwardEulerStep<F, J, R> m_stepper;
-    mutable double3 m_y{};
-    double m_out_interval;
-    mutable double m_t;
-    mutable double m_t_save = m_out_interval;
+    BackwardEulerStep<F,J,R> m_coarse_stepper;
+    BDF2Step<F,J,R> m_fine_stepper;
+    double m_errtol;
+    double m_t_save;
+    int m_max_iters;
 };
-
-template<typename G, typename F>
-__device__ void parareal(
-    const double3& y0,
-    double t_start,
-    double t_end,
-    double3* y_out,
-    double* t_out,
-    double3* f_values,
-    double3* g_values,
-    size_t size,
-    double errtol,
-    int max_iters,
-    const G& coarse_solver,
-    const F& fine_stepper,
-    bool* converged)
-{
-    cg::grid_group group = cg::this_grid();
-
-    auto tid = group.thread_rank();
-    auto group_size = group.size();
-    if (tid == 0) {
-        *converged = false;
-        coarse_solver(y0, t_start, t_end, y_out, t_out, size);
-    }
-
-    group.sync();
-
-    for (int k = 0; k < max_iters; ++k) {
-        if (*converged) break;
-
-        for (int i = tid; i < size - 1; i += group_size) {
-            if (i == 0) {
-                f_values[i] = fine_stepper(y_out[i], t_out[i]).y;
-                g_values[i] = coarse_solver.step(y_out[i], t_out[i]).y;
-            }
-            else {
-                f_values[i] = fine_stepper(y_out[i - 1], y_out[i], t_out[i]).y;
-                g_values[i] = coarse_solver.step(y_out[i], t_out[i]).y;
-            }
-        }
-        group.sync();
-
-        if (tid == 0) {
-            double max_error = 0.0;
-
-            for (size_t i = 0; i < size - 1; ++i) {
-                auto y_prev = y_out[i + 1];
-                auto [g_new_y, g_new_t] = coarse_solver.step(y_out[i], t_out[i]);
-                y_out[i + 1] = g_new_y + f_values[i] - g_values[i];
-                auto error = d3abs(y_out[i + 1] - y_prev);
-                max_error = fmax(max_error, fmax(error.x, fmax(error.y, error.z)));
-            }
-            *converged = max_error < errtol;
-        }
-    }
-    group.sync();
-}
 
 #endif //APP_FELEVES_NUMERIC_CUH

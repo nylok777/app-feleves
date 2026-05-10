@@ -211,7 +211,12 @@ __device__ double3 bdf2_step(
         };
 
         // Solve the nonlinear system using the provided Newton-Raphson solver
-        y_next = solver(y_pred, G, J_G);
+        maybe<double3> y_next_maybe = solver(y_pred, G, J_G);
+        if (!y_next_maybe.has_value()) {
+            h *= 0.5;
+            continue;
+        }
+        y_next = std::move(y_next_maybe.value());
 
         // Local Truncation Error (LTE) estimation via Predictor-Corrector difference
         const double error_norm = l2norm(y_next - y_pred) / (1.0 + rho);
