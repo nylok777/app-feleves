@@ -28,7 +28,7 @@ Mat3<double> ldx::jacobian(const double3& y, const ProDrugPkParams& params, cons
             params.abs_rate_c(), -d_rate, 0,
             0, d_rate, -d_params.elim_rate_c()
         };
-    return Double3x3{a};
+    return Double3x3_Old{a};
 }
 
 double3 ldx::LdxModel::operator()(const double3& y) const
@@ -36,7 +36,7 @@ double3 ldx::LdxModel::operator()(const double3& y) const
     return ldx_model(y, pk_params, mm_params);
 }
 
-Double3x3 ldx::LdxModel::jac(const double3& y) const
+Double3x3_Old ldx::LdxModel::jac(const double3& y) const
 {
     return jacobian(y, pk_params, mm_params);
 }

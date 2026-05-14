@@ -44,12 +44,113 @@ __host__ __device__ inline double l2norm(const double3& vec)
     return sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
 }
 
-__device__ inline double3 solve_linear_system(Double3x3 a, double* b)
+template<number T, int N>
+__device__ VectorND<T,N> forward_substitution(const Matrix<T,N>& L, const VectorND<T,N>& b,
+    VectorND<T,N> y)
 {
+    for (int i = 0; i < N; ++i) {
+        T sum = Matrix<T,N>::dot(L, y, i, i);
+        y[i] = (b[i] - sum) / L(i,i);
+    }
+    return y;
+}
+
+template<number T, int N>
+__device__ VectorND<T,N> forward_substitution(
+    const Matrix<T,N>& L,
+    const VectorND<T,N>& b,
+    const VectorND<int,N>& pivot,
+    VectorND<T,N> y)
+{
+    for (int i = 0; i < N; ++i) {
+        T sum = Matrix<T,N>::dot(L, y, i, i);
+        y[i] = (b[pivot[i]] - sum) / L(i, i);
+    }
+    return y;
+}
+
+template<number T, int N>
+__device__ VectorND<T,N> backward_substitution(const Matrix<T,N>& U, const VectorND<T,N>& y, VectorND<T,N> x)
+{
+    for (int i = N - 1; i >= 0; --i) {
+        T sum{0};
+        if (int len = N - 1 - i; len > 0)
+            sum = Matrix<T,N>::dot(U, x, i, len, i+1);
+        x[i] = (y[i] - sum) / U(i,i);
+    }
+    return x;
+}
+
+template<number T, int N>
+struct lu_matrices {
+    Matrix<T,N> L;
+    Matrix<T,N> U;
+    VectorND<int,N> pivot;
+};
+
+template<number T, int N, typename vector = VectorND<T,N>>
+__device__ vector lu_solve(const lu_matrices<T,N>& lu, const vector& b, vector x)
+{
+    auto y = forward_substitution(lu.L, b, lu.pivot, vector{});
+    return backward_substitution(lu.U, y, x);
+}
+
+template<number T, int N, typename vector = VectorND<T,N>, typename matrix = Matrix<T,N>>
+__device__ lu_matrices<T,N> lu_decomp(const matrix& A)
+{
+    using intvector = VectorND<int,N>;
+    matrix L = matrix::make_identity();
+    intvector p = intvector::make_sequence();
+    matrix U{};
+    vector u_col{};
+
+    for (int i = 0; i < N; ++i) {
+        T max_val{};
+        int pivot_row = i;
+        if (i > 0)
+            u_col = U.col(i, i);
+        for (int k = i; k < N; ++k) {
+            T sum{0};
+            if (i > 0)
+                sum = matrix::dot(L, u_col, k, i);
+            if (T val = fabs(A(p[k], i) - sum); val > max_val) {
+                max_val = val;
+                pivot_row = k;
+            }
+        }
+
+        //TODO: check singular if can't avoid
+
+        if (pivot_row != i) {
+            cuda::std::swap(p[i], p[pivot_row]);
+            for (int j = 0; j < i; ++j)
+                cuda::std::swap(L(i, j), L(pivot_row, j));
+        }
+
+        for (int k = i; k < N; ++k) {
+            u_col = U.col(k, i);
+            T sum = matrix::dot(L, u_col, i, i);
+            U(i, k) = A(p[i], k) - sum;
+        }
+
+        if (int k = i + 1; k < N) {
+            u_col = U.col(i, i);
+            for (; k < N; ++k) {
+                T sum = matrix::dot(L, u_col, k, i);
+                L(k, i) = (A(p[k], i) - sum) / U(i, i);
+            }
+        }
+    }
+    return {std::move(L), std::move(U), std::move(p)};
+}
+
+__device__ inline double3 solve_linear_system(Double3x3_Old a, const double3& b_v)
+{
+    double b[3] {b_v.x, b_v.y, b_v.z};
     for (int i = 0; i < 3; ++i) {
         int max_row = i;
         for (int j = i + 1; j < 3; ++j) {
-            if (abs(a(j, i)) > abs(a(max_row, i)))
+            if (fabs(a(j, i)) > fabs(a(max_row, i)))
                 max_row = j;
         }
         for (int j = 0; j < 3; ++j) {
@@ -92,9 +193,9 @@ __device__ maybe<double3> newton_raphson_system(
 {
     for (int i = 0; i < max_iter; ++i) {
         double3 fx = system_fn(y);
-        Double3x3 jx = jac_fn(y);
+        Double3x3_Old jx = jac_fn(y);
         auto fx_neg = make_double3(-fx.x, -fx.y, -fx.z);
-        double3 dx = solve_linear_system(jx, reinterpret_cast<double*>(&fx_neg));
+        double3 dx = solve_linear_system(jx, fx_neg);
         y += dx;
         if (l2norm(dx) < tolerance) {
             return y;
@@ -127,7 +228,7 @@ __device__ double3 forward_euler(const F& system, const double3& y, double h)
 }
 
 template<typename J, typename F, typename R>
-__device__ double3 bdf1_step(
+__device__ double3 bdf1_step_adaptive(
     double3 y,
     double& t,
     double errtol,
@@ -140,9 +241,9 @@ __device__ double3 bdf1_step(
     {
         return y_next - y - (step_size * sys_func(y_next));
     };
-    auto nonlinear_eq_jac = [&step_size, &jac_func] __device__ (const double3& y_next) -> Double3x3
+    auto nonlinear_eq_jac = [&step_size, &jac_func] __device__ (const double3& y_next) -> Double3x3_Old
     {
-        return Double3x3::make_identity() - (step_size * jac_func(y_next));
+        return Double3x3_Old::make_identity() - (step_size * jac_func(y_next));
     };
     bool step_accepted = false;
     double3 y_next;
@@ -165,7 +266,7 @@ __device__ double3 bdf1_step(
 }
 
 template<typename J, typename F, typename R>
-__device__ double3 bdf2_step(
+__device__ double3 bdf2_step_adaptive(
     double3 y,
     double& t,
     double& h,
@@ -207,7 +308,7 @@ __device__ double3 bdf2_step(
         // J_G(y) = I - beta * h * J_f(y)
         auto J_G = [=] __device__ (double3 yn)
         {
-            return Double3x3::make_identity() - (beta * h) * jac_func(yn);
+            return Double3x3_Old::make_identity() - (beta * h) * jac_func(yn);
         };
 
         // Solve the nonlinear system using the provided Newton-Raphson solver
@@ -236,6 +337,52 @@ __device__ double3 bdf2_step(
         h *= scale;
     }
 
+    return y_next;
+}
+
+template<int Dim>
+struct rosenbrock_coefficients {
+    DoubleMat<Dim> A;
+    DoubleMat<Dim> C;
+    DoubleMat<Dim> gamma;
+    DoubleND<Dim> m;
+};
+
+template<typename F, typename JacFn, int N, int S>
+__device__ DoubleND<N> rosenbrock_method_step(
+    const DoubleND<N>& y,
+    const double h,
+    const rosenbrock_coefficients<S>& coeffs,
+    F&& system_fn,
+    JacFn&& system_jac)
+{
+    using matrixN = DoubleMat<N>;
+
+    using vectorN = DoubleND<N>;
+
+    F f = std::forward<F>(system_fn);
+    matrixN J = std::forward<JacFn>(system_jac)(y);
+    matrixN I = matrixN::make_identity();
+    vectorN u[S]{};
+
+    for (int i = 0; i < S; ++i) {
+        auto y_tmp = y;
+        for (int j = 0; j < i; ++j) {
+            y_tmp += coeffs.A(i, j) * u[j];
+        }
+        vectorN rhs = f(y_tmp);
+
+        for (int j = 0; j < i; ++j) {
+            rhs += (coeffs.C(i, j) / h) * u[j];
+        }
+        auto W = (1.0 / (h * coeffs.gamma(i, i))) * I - J;
+        auto lu = lu_decomp<double,N>(W);
+        u[i] = lu_solve<double,N>(lu, rhs, u[i]);
+    }
+
+    auto y_next = y;
+    for (int i = 0; i < S; ++i)
+        y_next += coeffs.m[i] * u[i];
     return y_next;
 }
 

@@ -14,6 +14,11 @@ add_executable(app_feleves main.cu
         types.cu
         ldx.cu)
 
+target_compile_options(app_feleves PRIVATE
+        "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:--ptxas-options=-v>"
+        "$<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>"
+)
+
 set_target_properties(app_feleves PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON)
 
@@ -29,6 +34,7 @@ add_executable(app_feleves_test test.cu
 
 target_compile_options(app_feleves_test PRIVATE
         "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:--ptxas-options=-v>"
+        "$<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>"
 )
 
 target_link_libraries(app_feleves_test GTest::gtest GTest::gtest_main)

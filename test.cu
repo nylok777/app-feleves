@@ -60,7 +60,7 @@ struct LorenzSystem
 
 struct LorenzJac
 {
-    __host__ __device__ Double3x3 operator()(const double3& vy) const
+    __host__ __device__ Double3x3_Old operator()(const double3& vy) const
     {
         double data[9]
         {
@@ -68,7 +68,7 @@ struct LorenzJac
             28.0 - vy.z, -1, -vy.x,
             vy.y, vy.x, -(8.0 / 3.0)
         };
-        return Double3x3{data};
+        return Double3x3_Old{data};
     }
 };
 
@@ -150,16 +150,16 @@ TEST_F(BDFTest, Order1)
 
 struct DecayingSpiral
 {
-    __device__ double3 operator()(const double3& v) const
+    __device__ Double3 operator()(const Double3& v) const
     {
         constexpr double lambda = 0.5;
-        return make_double3(-v.y, v.x, -lambda * v.z);
+        return Double3{-v[1], v[0], (-lambda * v[2])};
     }
 };
 
 struct DecayingSpiralJacobian
 {
-    __device__ Double3x3 operator()(const double3& v) const
+    __device__ Double3x3 operator()(const Double3& v) const
     {
         double data[9]
         {
@@ -171,84 +171,33 @@ struct DecayingSpiralJacobian
     }
 };
 
-class PararealTest : public testing::Test
-{
+class VectorOperationsTest : public testing::Test {
 protected:
-    using PararealDecSpiral = Parareal<DecayingSpiral,DecayingSpiralJacobian,NewtonRaphsonSystem>;
-    using BDF1DecSpiral = BackwardEulerStep<DecayingSpiral,DecayingSpiralJacobian,NewtonRaphsonSystem>;
-    using BDF2DecSpiral = BDF2Step<DecayingSpiral,DecayingSpiralJacobian,NewtonRaphsonSystem>;
-
-    static constexpr double atol = 1e-6;
-    static constexpr double save_interval = 0.02;
-    PararealDecSpiral parareal;
-
-    PararealTest()
-        : parareal(
-            BackwardEulerStep{1e-4, 1e-4, DecayingSpiral{}, DecayingSpiralJacobian{},
-                NewtonRaphsonSystem{atol, 4}}, BDF2Step{atol, 1e-4, DecayingSpiral{},
-                    DecayingSpiralJacobian{}, NewtonRaphsonSystem{atol, 4}}, atol, save_interval, 5000)
-    {
-    }
+    Double3 double_vector = Double3::make_sequence(1);
 };
 
-template<typename F, typename J, typename R>
-__global__ __launch_bounds__(512) void test_kernel_parareal(Parareal<F,J,R> parareal, const double3 y0, const double t0, const
-    double tf,
-    double3* y_out, double3* f_values, double3* g_values, bool* converged)
+TEST_F(VectorOperationsTest, ScalarAdd)
 {
-    //asm volatile (".pragma \"enable_smem_spilling\";");
-    parareal(y0, t0, tf, y_out, f_values, g_values, converged);
+    double_vector += 1.0;
+    EXPECT_EQ(double_vector, Double3(2., 3., 4.));
+    auto vec = double_vector + 10;
+    auto vec2 = 10 + double_vector;
+    Double3 expected{12., 13., 14.};
+    EXPECT_EQ(vec, expected);
+    EXPECT_EQ(vec2, expected);
 }
 
-TEST_F(PararealTest, Call)
+TEST_F(VectorOperationsTest, VectorAdd)
 {
-    constexpr size_t max_threads = 512;
-    constexpr double tf = 10.0;
-    constexpr size_t t_span_size = (tf / save_interval) + 1;
-    double3* dev_y_out = nullptr;
-    double3* dev_f_vals = nullptr;
-    double3* dev_g_vals = nullptr;
-    bool* dev_converged = nullptr;
-    cudaMalloc(&dev_y_out, sizeof(double3) * t_span_size);
-    cudaMalloc(&dev_f_vals, sizeof(double3) * t_span_size);
-    cudaMalloc(&dev_g_vals, sizeof(double3) * t_span_size);
-    cudaMalloc(&dev_converged, sizeof(bool));
-    constexpr size_t num_threads = t_span_size < max_threads ? t_span_size : max_threads;
-    constexpr size_t num_blocks = t_span_size == num_threads ? 1 : (t_span_size / num_threads) + 1;
-    cudaFuncSetCacheConfig(&test_kernel_parareal<DecayingSpiral,DecayingSpiralJacobian,NewtonRaphsonSystem>, cudaFuncCachePreferL1);
-
-    auto y0 = make_double3(1.0, 0.0, 1.0);
-    double t0 = 0.0;
-    double t_end = tf;
-
-    void* args[] { &parareal, &y0, &t0, &t_end, &dev_y_out, &dev_f_vals, &dev_g_vals, &dev_converged };
-
-    cudaLaunchCooperativeKernel(&test_kernel_parareal<DecayingSpiral,DecayingSpiralJacobian,NewtonRaphsonSystem>, dim3{num_blocks},
-        dim3{num_threads}, args);
-
-    bool converged;
-    auto cuda_err = cudaGetLastError();
-    if (cuda_err != cudaSuccess)
-        std::cout << '\n' << std::string{cudaGetErrorString(cuda_err)} << '\n';
-
-    cudaMemcpy(&converged, dev_converged, sizeof(bool), cudaMemcpyDeviceToHost);
-    EXPECT_TRUE(converged);
-
-    double3 y_out[t_span_size];
-    cudaMemcpy(&y_out, dev_y_out, sizeof(double3) * t_span_size, cudaMemcpyDeviceToHost);
-    const auto& y10 = y_out[t_span_size - 1];
-    double3 y_expected = make_double3(std::cos(tf), std::sin(tf), std::pow(std::numbers::e, -0.5 * tf));
-    std::cout << "actual:" << '\n';
-    std::cout << "x: " << y_expected.x << "\ty: " << y_expected.y << "\tz: " << y_expected.z << '\n';
-    std::cout << "result:" << '\n';
-    std::cout << "x: " << y10.x << "\ty: " << y10.y << "\tz: " << y10.z << '\n';
-    auto diff = d3abs(y_out[t_span_size - 1] - y_expected);
-    EXPECT_LE(diff.x, atol);
-    EXPECT_LE(diff.y, atol);
-    EXPECT_LE(diff.z, atol);
-
-    cudaFree(dev_y_out);
-    cudaFree(dev_f_vals);
-    cudaFree(dev_g_vals);
-    cudaFree(dev_converged);
+    auto vec = Double3::make_sequence(1);
+    double_vector += vec;
+    Double3 expected{2., 4., 6.};
+    EXPECT_EQ(double_vector, expected);
+    auto vec2 = vec + Double3::make_sequence(10);
+    auto vec3 = Double3::make_sequence(10) + vec;
+    vec += Double3{10,11,12};
+    expected = Double3{11, 13, 15};
+    EXPECT_EQ(vec2, expected);
+    EXPECT_EQ(vec3, expected);
+    EXPECT_EQ(vec, expected);
 }
