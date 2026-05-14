@@ -4,7 +4,7 @@
 #include <cuda_runtime.h>
 
 #include "types.cuh"
-#include "numeric_funcs.cuh"
+#include "solver_funcs.cuh"
 
 __host__ __device__ static double find_ka_func(double ka, double elim_rate, double tmax)
 {

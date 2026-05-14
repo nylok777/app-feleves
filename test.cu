@@ -3,8 +3,9 @@
 //
 
 #include <gtest/gtest.h>
-#include "numeric_funcs.cuh"
 #include "numeric.cuh"
+#include "numeric_funcs.cuh"
+#include "solver_funcs.cuh"
 
 class NewtonRaphsonTest : public testing::Test
 {

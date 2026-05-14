@@ -6,15 +6,16 @@ set(CMAKE_CXX_STANDARD 20)
 
 find_package(GTest REQUIRED)
 
-add_executable(app_feleves main.cu
+add_library(app_feleves STATIC
         types.cuh
         ldx.cuh
         numeric_funcs.cuh
         numeric.cuh
         types.cu
-        ldx.cu)
+        ldx.cu
+        solver_funcs.cuh)
 
-target_compile_options(app_feleves PRIVATE
+target_compile_options(app_feleves PUBLIC
         "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:--ptxas-options=-v>"
         "$<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>"
 )
@@ -24,17 +25,6 @@ set_target_properties(app_feleves PROPERTIES
 
 target_link_libraries(app_feleves m)
 
-add_executable(app_feleves_test test.cu
-        types.cuh
-        numeric_funcs.cuh
-        ldx.cuh
-        types.cu
-        numeric.cuh
-        ldx.cu)
+add_executable(app_feleves_test test.cu)
 
-target_compile_options(app_feleves_test PRIVATE
-        "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:--ptxas-options=-v>"
-        "$<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>"
-)
-
-target_link_libraries(app_feleves_test GTest::gtest GTest::gtest_main)
+target_link_libraries(app_feleves_test app_feleves GTest::gtest GTest::gtest_main)
