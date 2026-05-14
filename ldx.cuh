@@ -9,21 +9,21 @@
 namespace ldx
 {
 
-__device__ double3 ldx_model(
-    const double3& y,
+__device__ Double3 ldx_model(
+    const Double3& y,
     const ProDrugPkParams& params,
     const MichaelisMentenParams& mm_params
 );
 
-__device__ Mat3<double> jacobian(
-    const double3& y,
+__device__ Double3x3 jacobian(
+    const Double3& y,
     const ProDrugPkParams& params,
     const MichaelisMentenParams& mm_params
 );
 
 struct LdxModel {
-    __device__ double3 operator()(const double3& y) const;
-    __device__ Double3x3_Old jac(const double3& y) const;
+    __device__ Double3 operator()(const Double3& y) const;
+    __device__ Double3x3 jac(const Double3& y) const;
 
     ProDrugPkParams pk_params;
     MichaelisMentenParams mm_params;

@@ -7,19 +7,19 @@
 #include "numeric_funcs.cuh"
 #include "types.cuh"
 
-template<typename SystemFn, typename JacobianFn>
-__device__ maybe<double3> newton_raphson_system(
-    double3 y,
+template<int N, typename SystemFn, typename JacobianFn>
+__device__ maybe<DoubleND<N>> newton_raphson(
+    DoubleND<N> y,
     const SystemFn& system_fn,
     const JacobianFn& jac_fn,
     double tolerance,
     int max_iter)
 {
     for (int i = 0; i < max_iter; ++i) {
-        double3 fx = system_fn(y);
-        Double3x3_Old jx = jac_fn(y);
-        auto fx_neg = make_double3(-fx.x, -fx.y, -fx.z);
-        double3 dx = solve_linear_system(jx, fx_neg);
+        DoubleND<N> fx = system_fn(y);
+        DoubleMat<N> jx = jac_fn(y);
+        auto fx_neg = -fx;
+        auto dx = lu_solve<double,3>(jx, fx_neg);
         y += dx;
         if (l2norm(dx) < tolerance) {
             return y;
@@ -45,15 +45,15 @@ __host__ __device__ maybe<double> newton_raphson(
     return {};
 }
 
-template<typename F>
-__device__ double3 forward_euler(const F& system, const double3& y, double h)
+template<typename F, int N>
+__device__ DoubleND<N> forward_euler(const F& system, const DoubleND<N>& y, double h)
 {
     return y + (h * system(y));
 }
 
-template<typename J, typename F, typename R>
-__device__ double3 bdf1_step_adaptive(
-    double3 y,
+template<typename J, typename F, typename R, int N>
+__device__ DoubleND<N> bdf1_step_adaptive(
+    DoubleND<N> y,
     double& t,
     double errtol,
     double& step_size,
@@ -61,25 +61,25 @@ __device__ double3 bdf1_step_adaptive(
     const J& jac_func,
     const R& solver)
 {
-    auto nonlinear_eq = [&step_size, &sys_func, &y] __device__ (const double3& y_next) -> double3
+    auto nonlinear_eq = [&step_size, &sys_func, &y] __device__ (const DoubleND<N>& y_next)
     {
         return y_next - y - (step_size * sys_func(y_next));
     };
-    auto nonlinear_eq_jac = [&step_size, &jac_func] __device__ (const double3& y_next) -> Double3x3_Old
+    auto nonlinear_eq_jac = [&step_size, &jac_func] __device__ (const DoubleND<N>& y_next)
     {
-        return Double3x3_Old::make_identity() - (step_size * jac_func(y_next));
+        return Double3x3::make_identity() - (step_size * jac_func(y_next));
     };
     bool step_accepted = false;
-    double3 y_next;
+    DoubleND<N> y_next;
     while (!step_accepted) {
         auto y_pred = forward_euler(sys_func, y, step_size);
-        maybe<double3> y_opt = solver(y_pred, nonlinear_eq, nonlinear_eq_jac);
+        maybe<DoubleND<N>> y_opt = solver(y_pred, nonlinear_eq, nonlinear_eq_jac);
         if (!y_opt.has_value()) {
             step_size *= 0.5;
             continue;
         }
         y_next = std::move(y_opt.value());
-        auto error = l2norm(d3abs(y_next - y_pred)) / 2.0;
+        auto error = l2norm<N>(dNabs(y_next - y_pred)) / 2.0;
         if (error <= errtol) {
             t += step_size;
             step_accepted = true;
@@ -89,19 +89,19 @@ __device__ double3 bdf1_step_adaptive(
     return y_next;
 }
 
-template<typename J, typename F, typename R>
-__device__ double3 bdf2_step_adaptive(
-    double3 y,
+template<typename J, typename F, typename R, int N>
+__device__ DoubleND<N> bdf2_step_adaptive(
+    DoubleND<N> y,
     double& t,
     double& h,
     double errtol,
-    double3 y_prev,
+    DoubleND<N> y_prev,
     double& h_prev,
     const F& sys_func,
     const J& jac_func,
     const R& solver)
 {
-    double3 y_next;
+    DoubleND<N> y_next;
     bool step_accepted = false;
 
     // Safety factors for the adaptive step size controller
@@ -119,24 +119,24 @@ __device__ double3 bdf2_step_adaptive(
         const double beta = (1.0 + rho) / (1.0 + 2.0 * rho);
 
         // Predictor: Explicit linear extrapolation for initial Newton guess
-        double3 y_pred = (1.0 + rho) * y - rho * y_prev;
+        DoubleND<N> y_pred = (1.0 + rho) * y - rho * y_prev;
 
         // Lambda 1: The nonlinear equation G(y_next) = 0
         // G(y) = y - alpha1*y_n - alpha2*y_{n-1} - beta*h*f(y)
-        auto G = [=] __device__ (double3 yn)
+        auto G = [=] __device__ (DoubleND<N> yn)
         {
             return yn - (alpha1 * y) - (alpha2 * y_prev) - (beta * h) * sys_func(yn);
         };
 
         // Lambda 2: The derivative (Jacobian) of G
         // J_G(y) = I - beta * h * J_f(y)
-        auto J_G = [=] __device__ (double3 yn)
+        auto J_G = [=] __device__ (DoubleND<N> yn)
         {
-            return Double3x3_Old::make_identity() - (beta * h) * jac_func(yn);
+            return Double3x3::make_identity() - (beta * h) * jac_func(yn);
         };
 
         // Solve the nonlinear system using the provided Newton-Raphson solver
-        maybe<double3> y_next_maybe = solver(y_pred, G, J_G);
+        maybe<DoubleND<N>> y_next_maybe = solver(y_pred, G, J_G);
         if (!y_next_maybe.has_value()) {
             h *= 0.5;
             continue;
@@ -144,7 +144,7 @@ __device__ double3 bdf2_step_adaptive(
         y_next = std::move(y_next_maybe.value());
 
         // Local Truncation Error (LTE) estimation via Predictor-Corrector difference
-        const double error_norm = l2norm(y_next - y_pred) / (1.0 + rho);
+        const double error_norm = l2norm<N>(y_next - y_pred) / (1.0 + rho);
 
         if (error_norm <= errtol) {
             step_accepted = true;

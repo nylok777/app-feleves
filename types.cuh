@@ -34,6 +34,9 @@ using maybe = cuda::std::optional<T>;
 template<typename T>
 concept number = std::integral<T> || std::floating_point<T>;
 
+template<typename T>
+concept signed_number = std::signed_integral<T> || std::floating_point<T>;
+
 template<typename T, int Dim>
     requires std::integral<T> || std::floating_point<T>
 class VectorND {
@@ -85,15 +88,16 @@ public:
     DEF_TENSOR_TENSOR_OP(VectorND, operator*, *=)
     DEF_TENSOR_TENSOR_OP(VectorND, operator/, /=)
 
+    friend __host__ __device__ VectorND operator-(VectorND vec) { return vec *= T{-1}; }
 };
 
-template<typename T, int Dim>
-    requires std::integral<T> || std::floating_point<T>
+template<number T, int Dim>
 class Matrix {
     static constexpr int Size = Dim * Dim;
 public:
     Matrix() = default;
     explicit Matrix(T data[Size]) : m_data() {memcpy(m_data, data, Size * sizeof(T)); }
+    template<number... U> explicit Matrix(U... items) : m_data(items...) {}
     __host__ __device__ T& operator()(int i, int j) { return m_data[(i * Dim) + j]; }
     __host__ __device__ T operator()(int i, int j) const { return m_data[(i * Dim) + j]; }
     __host__ __device__ VectorND<T,Dim> col(int j, int num_rows = Dim) const
@@ -183,8 +187,9 @@ private:
     T m_data[9];
 };
 
+template<int N>
 struct step_result {
-    double3 y;
+    DoubleND<N> y;
     double t;
 };
 

@@ -5,22 +5,22 @@
 #ifndef APP_FELEVES_NUMERIC_CUH
 #define APP_FELEVES_NUMERIC_CUH
 #include <cooperative_groups.h>
-#include <cuda/std/tuple>
 #include "numeric_funcs.cuh"
 
 namespace cg = cooperative_groups;
 
-class NewtonRaphsonSystem
+template<int N>
+class NewtonRaphson
 {
 public:
-    NewtonRaphsonSystem(double errtol, int max_iter)
+    NewtonRaphson(double errtol, int max_iter)
         : m_errtol(errtol),
           m_iters(max_iter) {}
 
     template<typename SystemFn, typename JacobianFn>
-    __device__ maybe<double3> operator()(double3 y, const SystemFn& sys_fn, const JacobianFn& jac_fn) const
+    __device__ maybe<DoubleND<N>> operator()(DoubleND<N> y, const SystemFn& sys_fn, const JacobianFn& jac_fn) const
     {
-        return newton_raphson_system(std::move(y), sys_fn, jac_fn, m_errtol, m_iters);
+        return newton_raphson(std::move(y), sys_fn, jac_fn, m_errtol, m_iters);
     }
 
 private:
@@ -28,33 +28,29 @@ private:
     int m_iters;
 };
 
-template<typename F, typename Df>
-class NewtonRaphson
+template<>
+class NewtonRaphson<1>
 {
 public:
     NewtonRaphson(
-        const F& f,
-        const Df& df,
         double tolerance,
         int max_iter)
-        : m_fn(f),
-          m_derivfn(df),
-          m_errtol(tolerance),
-          m_iters(max_iter) {}
+        :
+        m_errtol(tolerance),
+        m_iters(max_iter) {}
 
-    __device__ maybe<double> operator()(double y)
+    template<typename F, typename Df>
+    __device__ maybe<double> operator()(double y, F&& f, Df&& df)
     {
-        return newton_raphson(y, m_fn, m_derivfn, m_errtol, m_iters);
+        return newton_raphson(y, std::forward<F>(f), std::forward<Df>(df), m_errtol, m_iters);
     }
 
 private:
-    F m_fn;
-    Df m_derivfn;
     double m_errtol;
     int m_iters;
 };
 
-template<typename F, typename J, typename R>
+template<typename F, typename J, typename R, int N>
 class BDF2Step
 {
 public:
@@ -66,7 +62,7 @@ public:
           m_prev_step_size(step_size),
           m_step_size(step_size) {}
 
-    __device__ step_result operator()(const double3& y0, double t0, double& t1, double3& y1)
+    __device__ step_result<N> operator()(const DoubleND<N>& y0, double t0, double& t1, DoubleND<N>& y1)
     {
         t1 = t0;
         y1 = bdf1_step_adaptive(y0, t1, m_errtol, m_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
@@ -76,7 +72,7 @@ public:
         return {std::move(y_next), t2};
     }
 
-    __device__ step_result operator()(const double3& y_prev, const double3& y, double t)
+    __device__ step_result<N> operator()(const DoubleND<N>& y_prev, const DoubleND<N>& y, double t)
     {
         auto t_next = t;
         auto y_next = bdf2_step_adaptive(y, t_next, m_step_size, m_errtol, y_prev, m_prev_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
@@ -92,7 +88,7 @@ private:
     mutable double m_step_size;
 };
 
-template<typename F, typename J, typename R>
+template<typename F, typename J, typename R, int N>
 class BackwardEulerStepAdaptive
 {
 public:
@@ -103,7 +99,7 @@ public:
           m_errtol(errtol),
           m_step_size(step_size) {}
 
-    __device__ step_result operator()(const double3& y, double t) const
+    __device__ step_result<N> operator()(const DoubleND<N>& y, double t) const
     {
         auto res = bdf1_step_adaptive(y, t, m_errtol, m_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
         return {std::move(res), t};
@@ -120,7 +116,7 @@ private:
     mutable double m_step_size;
 };
 
-template<typename F, typename J, typename R>
+template<typename F, typename J, typename R, int N>
 class BackwardEuler
 {
 public:
@@ -129,7 +125,7 @@ public:
           m_out_interval(output_interval), m_t(t0) {}
 
     __device__ solver_status operator()(
-        const double3& y0, double t0, double h, double t_end, double3* y_out, double* t_out, size_t size, size_t start_step = 0)
+        const DoubleND<N>& y0, double t0, double h, double t_end, DoubleND<N>* y_out, double* t_out, size_t size, size_t start_step = 0)
     {
         m_t = t0;
         m_stepper.set_step_size(h);
@@ -137,7 +133,7 @@ public:
     }
 
     __device__ solver_status operator()(
-        const double3& y0, double t_end, double3* y_out, size_t size, size_t start_step = 0)
+        const DoubleND<N>& y0, double t_end, DoubleND<N>* y_out, size_t size, size_t start_step = 0)
     {
         size_t save_idx = start_step;
         double t_save = m_out_interval;
@@ -157,7 +153,7 @@ public:
     }
 
 private:
-    BackwardEulerStepAdaptive<F, J, R> m_stepper;
+    BackwardEulerStepAdaptive<F, J, R, N> m_stepper;
     double m_out_interval;
     mutable double m_t;
 };

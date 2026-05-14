@@ -10,7 +10,7 @@ add_library(app_feleves STATIC
         types.cuh
         ldx.cuh
         numeric_funcs.cuh
-        numeric.cuh
+        solvers.cuh
         types.cu
         ldx.cu
         solver_funcs.cuh)

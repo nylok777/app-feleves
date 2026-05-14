@@ -41,7 +41,24 @@ __host__ __device__ inline double3 d3abs(const double3& x)
 
 __host__ __device__ inline double l2norm(const double3& vec)
 {
-    return sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
+    return fsqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
+}
+
+template<int N>
+__host__ __device__ DoubleND<N> dNabs(DoubleND<N> vec)
+{
+    for (int i = 0; i < N; ++i)
+        if (vec[i] < 0.0) vec[i] *= -1.0;
+    return vec;
+}
+
+template<int N>
+__host__ __device__ double l2norm(const DoubleND<N>& vec)
+{
+    double sum = 0.0;
+    for (int i = 0; i < N; ++i)
+        sum += vec[i] * vec[i];
+    return fsqrt(sum);
 }
 
 template<number T, int N>
@@ -145,43 +162,10 @@ __device__ vector lu_solve(const lu_matrices<T,N>& lu, const vector& b)
     return backward_substitution(lu.U, y);
 }
 
-__device__ inline double3 solve_linear_system(Double3x3_Old a, const double3& b_v)
+template<signed_number T, int N, typename matrix = Matrix<T,N>, typename vector = VectorND<T,N>>
+__device__ vector lu_solve(const matrix& A, const vector& b)
 {
-    double b[3] {b_v.x, b_v.y, b_v.z};
-    for (int i = 0; i < 3; ++i) {
-        int max_row = i;
-        for (int j = i + 1; j < 3; ++j) {
-            if (fabs(a(j, i)) > fabs(a(max_row, i)))
-                max_row = j;
-        }
-        for (int j = 0; j < 3; ++j) {
-            auto tmp = a(i,j);
-            a(i,j) = a(max_row,j);
-            a(max_row,j) = tmp;
-        }
-        auto tmp = b[i];
-        b[i] = b[max_row];
-        b[max_row] = tmp;
-
-        for (int j = i + 1; j < 3; ++j) {
-            auto factor = a(j, i) / a(i, i);
-            for (int k = i; k < 3; ++k) {
-                a(j, k) -= factor * a(i, k);
-            }
-            b[j] -= factor * b[i];
-        }
-    }
-
-    double x[3];
-    for (double& i : x) i = 0.0;
-    for (int i = 2; i >= 0; --i) {
-        double sum = 0.0;
-        for (int j = i + 1; j < 3; ++j) {
-            sum += a(i, j) * x[j];
-        }
-        x[i] = (b[i] - sum) / a(i, i);
-    }
-    return make_double3(x[0], x[1], x[2]);
+    return lu_solve(lu_decomp<T,N>(A), b);
 }
 
 __device__ inline double3 linear_interpolation(const double3& y, const double3& y_next, double t, double t_next, double t_save)

@@ -3,7 +3,7 @@
 //
 
 #include <gtest/gtest.h>
-#include "numeric.cuh"
+#include "solvers.cuh"
 #include "numeric_funcs.cuh"
 #include "solver_funcs.cuh"
 
@@ -77,7 +77,7 @@ class NewtonRaphsonSystemTest : public testing::TestWithParam<std::pair<double3,
 {
 protected:
     static constexpr double errtol = 1e-10;
-    NewtonRaphsonSystem newton;
+    NewtonRaphson newton;
 
     NewtonRaphsonSystemTest() : newton(errtol, 1000) {}
 };
@@ -121,11 +121,11 @@ class BDFTest : public testing::Test
 protected:
     static constexpr double atol = 1e-4;
     static constexpr double save_interval = 0.02;
-    NewtonRaphsonSystem newton{atol, 3};
-    BackwardEuler<LorenzSystem, LorenzJac, NewtonRaphsonSystem> backward_euler{atol, 1e-4, save_interval, LorenzSystem{}, LorenzJac{},
+    NewtonRaphson newton{atol, 3};
+    BackwardEuler<LorenzSystem, LorenzJac, NewtonRaphson> backward_euler{atol, 1e-4, save_interval, LorenzSystem{}, LorenzJac{},
         newton};
-    BDF2Step<LorenzSystem, LorenzJac, NewtonRaphsonSystem> bdf2_stepper{atol, 1e-4, LorenzSystem{}, LorenzJac{},
-        NewtonRaphsonSystem{newton}};
+    BDF2Step<LorenzSystem, LorenzJac, NewtonRaphson> bdf2_stepper{atol, 1e-4, LorenzSystem{}, LorenzJac{},
+        NewtonRaphson{newton}};
 };
 
 template<typename S>
