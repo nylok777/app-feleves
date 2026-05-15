@@ -5,13 +5,12 @@
 #ifndef APP_FELEVES_NUMERIC_CUH
 #define APP_FELEVES_NUMERIC_CUH
 #include <cooperative_groups.h>
-#include "numeric_funcs.cuh"
+#include "solver_funcs.cuh"
 
 namespace cg = cooperative_groups;
 
 template<int N>
-class NewtonRaphson
-{
+class NewtonRaphson {
 public:
     NewtonRaphson(double errtol, int max_iter)
         : m_errtol(errtol),
@@ -29,15 +28,13 @@ private:
 };
 
 template<>
-class NewtonRaphson<1>
-{
+class NewtonRaphson<1> {
 public:
     NewtonRaphson(
         double tolerance,
         int max_iter)
-        :
-        m_errtol(tolerance),
-        m_iters(max_iter) {}
+        : m_errtol(tolerance),
+          m_iters(max_iter) {}
 
     template<typename F, typename Df>
     __device__ maybe<double> operator()(double y, F&& f, Df&& df)
@@ -51,8 +48,7 @@ private:
 };
 
 template<typename F, typename J, typename R, int N>
-class BDF2Step
-{
+class BDF2Step {
 public:
     BDF2Step(double errtol, double step_size, F&& system_fn, J&& jacobian_fn, R&& root_solver)
         : m_system_fn(std::move(system_fn)),
@@ -75,7 +71,16 @@ public:
     __device__ step_result<N> operator()(const DoubleND<N>& y_prev, const DoubleND<N>& y, double t)
     {
         auto t_next = t;
-        auto y_next = bdf2_step_adaptive(y, t_next, m_step_size, m_errtol, y_prev, m_prev_step_size, m_system_fn, m_jacobian_fn, m_root_solver);
+        auto y_next = bdf2_step_adaptive(
+            y,
+            t_next,
+            m_step_size,
+            m_errtol,
+            y_prev,
+            m_prev_step_size,
+            m_system_fn,
+            m_jacobian_fn,
+            m_root_solver);
         return {std::move(y_next), t_next};
     }
 
@@ -89,8 +94,32 @@ private:
 };
 
 template<typename F, typename J, typename R, int N>
-class BackwardEulerStepAdaptive
-{
+class BackwardEulerStep {
+public:
+    BackwardEulerStep(double h, F system_fn, J jacobian_fn, R root_solver)
+        :
+        m_sys_fn(std::move(system_fn)),
+        m_jac_fn(std::move(jacobian_fn)),
+        m_solver_fn(std::move(root_solver)),
+        m_step_size(h)
+    {}
+
+    __device__ maybe<DoubleND<N>> operator()(const DoubleND<N>& y) const
+    {
+        return bdf1_step(y, m_step_size, m_sys_fn, m_jac_fn, m_solver_fn);
+    }
+    __device__ double step_size() const { return m_step_size; }
+    __device__ void set_step_size(double h) { m_step_size = h; }
+
+private:
+    F m_sys_fn;
+    J m_jac_fn;
+    R m_solver_fn;
+    double m_step_size;
+};
+
+template<typename F, typename J, typename R, int N>
+class BackwardEulerStepAdaptive {
 public:
     BackwardEulerStepAdaptive(double errtol, double step_size, F system_fn, J jacobian_fn, R root_solver)
         : m_system_fn(std::move(system_fn)),
@@ -117,12 +146,12 @@ private:
 };
 
 template<typename F, typename J, typename R, int N>
-class BackwardEuler
-{
+class BackwardEuler {
 public:
     BackwardEuler(double errtol, double step_size, double output_interval, F system_fn, J jacobian_fn, R root_solver, double t0 = 0.0)
         : m_stepper(errtol, step_size, std::move(system_fn), std::move(jacobian_fn), std::move(root_solver)),
-          m_out_interval(output_interval), m_t(t0) {}
+          m_out_interval(output_interval),
+          m_t(t0) {}
 
     __device__ solver_status operator()(
         const DoubleND<N>& y0, double t0, double h, double t_end, DoubleND<N>* y_out, double* t_out, size_t size, size_t start_step = 0)
@@ -156,6 +185,35 @@ private:
     BackwardEulerStepAdaptive<F, J, R, N> m_stepper;
     double m_out_interval;
     mutable double m_t;
+};
+
+template<typename F, typename J, int S>
+class RosenbrockStep {
+public:
+    RosenbrockStep(double step_size, double errtol, rosenbrock_coefficients<S> coeffs, F sys_fn, J jac)
+        :
+        m_coefficients(std::move(coeffs)),
+        m_sys_fn(std::move(sys_fn)),
+        m_jac(std::move(jac)),
+        m_h(step_size),
+        m_errtol(errtol)
+    {}
+
+    template<int N>
+    __host__ __device__ DoubleND<N> operator()(const DoubleND<N>& y) const
+    {
+        return rosenbrock_method_step(y, m_h, m_coefficients, m_sys_fn, m_jac);
+    }
+
+    __host__ __device__ double step_size() const { return m_h; }
+    __host__ __device__ void set_step_size(double h) { m_h = h; }
+
+private:
+    rosenbrock_coefficients<S> m_coefficients;
+    F m_sys_fn;
+    J m_jac;
+    double m_h;
+    double m_errtol;
 };
 
 #endif //APP_FELEVES_NUMERIC_CUH

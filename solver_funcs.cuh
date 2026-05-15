@@ -4,8 +4,15 @@
 
 #ifndef APP_FELEVES_SOLVERS_CUH
 #define APP_FELEVES_SOLVERS_CUH
+#include <cooperative_groups.h>
 #include "numeric_funcs.cuh"
 #include "types.cuh"
+
+namespace cg = cooperative_groups;
+
+template<typename T, int N>
+concept ODE_solver = std::invocable<T, DoubleND<N>, double, DoubleND<N>*, size_t> &&
+    std::same_as<void, std::invoke_result_t<T, DoubleND<N>, double, DoubleND<N>*, size_t>>;
 
 template<int N, typename SystemFn, typename JacobianFn>
 __device__ maybe<DoubleND<N>> newton_raphson(
@@ -51,7 +58,23 @@ __device__ DoubleND<N> forward_euler(const F& system, const DoubleND<N>& y, doub
     return y + (h * system(y));
 }
 
-template<typename J, typename F, typename R, int N>
+template<typename F, typename J, typename R, int N>
+__device__ maybe<DoubleND<N>> bdf1_step(const DoubleND<N>& y, const double h, const F& f, const J& jac, const R& solver)
+{
+    auto nonlinear_eq = [h, &f, &y] __device__ (const DoubleND<N>& y_next)
+    {
+        return y_next - y - (h * f(y_next));
+    };
+    auto nonlinear_eq_jac = [h, &jac] __device__ (const DoubleND<N>& y_next)
+    {
+        return DoubleMat<N>::make_identity() - (h * jac(y_next));
+    };
+    auto y_pred = forward_euler(f, y, h);
+    maybe<DoubleND<N>> y_opt = solver(y_pred, nonlinear_eq, nonlinear_eq_jac);
+    return y_opt.or_else([](){ return maybe<DoubleND<N>>{}; });
+}
+
+template<typename F, typename J, typename R, int N>
 __device__ DoubleND<N> bdf1_step_adaptive(
     DoubleND<N> y,
     double& t,
@@ -67,7 +90,7 @@ __device__ DoubleND<N> bdf1_step_adaptive(
     };
     auto nonlinear_eq_jac = [&step_size, &jac_func] __device__ (const DoubleND<N>& y_next)
     {
-        return Double3x3::make_identity() - (step_size * jac_func(y_next));
+        return DoubleMat<N>::make_identity() - (step_size * jac_func(y_next));
     };
     bool step_accepted = false;
     DoubleND<N> y_next;
@@ -164,6 +187,26 @@ __device__ DoubleND<N> bdf2_step_adaptive(
     return y_next;
 }
 
+template<typename F, typename JacFn, int N>
+__host__ __device__ DoubleND<N> linearly_implicit_euler_step(
+    const DoubleND<N>& y,
+    const double h,
+    const F& f,
+    const JacFn& jac)
+{
+    using matrix = DoubleMat<N>;
+    using vector = DoubleND<N>;
+
+    vector fy = f(y);
+    matrix J = jac(y);
+
+    auto A = matrix::make_identity() - h * J;
+    auto b = h * fy;
+
+    auto dy = lu_solve(A, b);
+    return y + dy;
+}
+
 template<int Dim>
 struct rosenbrock_coefficients {
     DoubleMat<Dim> A;
@@ -208,6 +251,143 @@ __device__ DoubleND<N> rosenbrock_method_step(
     for (int i = 0; i < S; ++i)
         y_next += coeffs.m[i] * u[i];
     return y_next;
+}
+
+namespace detail
+{
+template<typename G, int N>
+__host__ __device__ int parareal_initial_solve(
+    const DoubleND<N>& y0,
+    const G& coarse_step,
+    DoubleND<N>* U,
+    const size_t size)
+{
+    using coarse_result = std::invoke_result_t<G, DoubleND<N>>;
+    // szekvenciálisan kell ezt a részt GPU-n is !!
+    auto y = y0;
+    for (size_t i = 0; i < size; ++i) {
+        if constexpr (std::same_as<coarse_result, maybe<DoubleND<N>>>) {
+            auto y_maybe = coarse_step(y);
+            if (!y_maybe.has_value()) return -2;
+            y = y_maybe.value();
+        }
+        else {
+            y = coarse_step(y);
+        }
+        U[i] = y;
+    }
+    return 0;
+}
+
+template<typename F, int N>
+__device__ void parareal_fine_steps(
+    const DoubleND<N>& y0,
+    const F& fine_step,
+    DoubleND<N>* U_pred,
+    DoubleND<N>* U_f,
+    const size_t size)
+{
+    const auto tid = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (tid == 0)
+        U_f[tid] = fine_step(y0);
+    else if (tid < size)
+        U_f[tid] = fine_step(U_pred[tid]);
+
+    __syncthreads();
+}
+
+template<int N, typename G>
+__host__ __device__ int parareal_correction(
+    const G& coarse_step,
+    DoubleND<N>* U_g,
+    DoubleND<N>* U_f,
+    DoubleND<N>* U_next,
+    const size_t size)
+{
+    using vector = DoubleND<N>;
+    using coarse_result = std::invoke_result_t<G, vector>;
+
+    double t = 0.0;
+    vector u = U_f[0]; // first element
+    U_next[0] = u;
+    for (size_t i = 1; i < size; ++i) {
+        if constexpr (std::same_as<coarse_result, maybe<vector>>) {
+            maybe<vector> u_maybe = coarse_step(u) + U_f[i-1] - U_g[i-1];
+            if (!u_maybe.has_value()) return -2;
+            u = u_maybe.value();
+        }
+        else {
+            u = coarse_step(u) + U_f[i-1] - U_g[i-1];
+        }
+        U_next[i] = u;
+    }
+    return 0;
+}
+
+template<int N>
+__host__ __device__ void parareal_check_convergence(
+    const DoubleND<N>* U_prev,
+    const DoubleND<N>* U,
+    const size_t size,
+    const double errtol,
+    bool* converged)
+{
+#ifdef __CUDA_ARCH__
+    const auto tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < size && fabs(U[tid] - U_prev[tid]) > errtol)
+        *converged = false;
+#else
+    for (size_t i = 0; i < size; ++i) {
+        if (std::fabs(U[i] - U_prev[i]) > errtol) {
+            *converged = false;
+            return;
+        }
+    }
+    *converged = true;
+#endif
+
+}
+
+__device__ inline bool dev_converged = false;
+__device__ inline int dev_parareal_exit_flag = 0;
+}
+
+template<typename G, typename F, int N>
+__global__ void parareal_loop(
+    const DoubleND<N>& y0,
+    const G& coarse_step,
+    const F& fine_step,
+    const double errtol,
+    DoubleND<N>* U_prev,
+    DoubleND<N>* U,
+    DoubleND<N>* U_next,
+    const size_t size)
+{
+    const auto grid = cg::this_grid();
+
+    const auto tx = threadIdx.x;
+    const auto tid = blockDim.x * blockIdx.x + tx;
+
+    if (tid == 0) {
+        detail::parareal_initial_solve(y0, coarse_step, U_prev, size);
+    }
+    grid.sync();
+
+    while (tid < size && !detail::dev_converged) {
+        detail::parareal_fine_steps(y0, fine_step, U_prev, U, size);
+        grid.sync();
+        if (tid == 0) {
+            detail::parareal_correction(coarse_step, U_prev, U, U_next, size);
+        }
+        grid.sync();
+        detail::parareal_check_convergence(U, U_next, size, errtol, &detail::dev_converged);
+        grid.sync();
+        if (tid == 0 && !detail::dev_converged)
+            U_prev = U_next;
+        grid.sync();
+    }
+    grid.sync();
 }
 
 #endif //APP_FELEVES_SOLVERS_CUH

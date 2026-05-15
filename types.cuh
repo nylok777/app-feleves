@@ -98,6 +98,24 @@ public:
     Matrix() = default;
     explicit Matrix(T data[Size]) : m_data() {memcpy(m_data, data, Size * sizeof(T)); }
     template<number... U> explicit Matrix(U... items) : m_data(items...) {}
+    __host__ __device__ static Matrix make_identity()
+    {
+        T data[Size]{ T{0} };
+        for (size_t i = 0; i < Size; i += Dim + 1)
+            data[i] = T{1};
+        return Matrix{data};
+    }
+    template<number... Args> requires (sizeof...(Args) == Dim) && std::convertible_to<Args, T>
+    __host__ __device__ static Matrix make_diagonal(Args... args)
+    {
+        T items[Dim] = {args...};
+        Matrix matrix{};
+        for (int i = 0; i < Dim; ++i) {
+            matrix(i,i) = items[i];
+        }
+        return matrix;
+    }
+
     __host__ __device__ T& operator()(int i, int j) { return m_data[(i * Dim) + j]; }
     __host__ __device__ T operator()(int i, int j) const { return m_data[(i * Dim) + j]; }
     __host__ __device__ VectorND<T,Dim> col(int j, int num_rows = Dim) const
@@ -106,13 +124,6 @@ public:
         for (int i = 0; i < num_rows; ++i)
             vec[i] = (*this)(i, j);
         return vec;
-    }
-    __host__ __device__ static Matrix make_identity()
-    {
-        T data[Size]{ T{0} };
-        for (size_t i = 0; i < Size; i += Dim + 1)
-            data[i] = T{1};
-        return Matrix{data};
     }
     __host__ __device__ static T dot(Matrix mat, const VectorND<T,Dim>& vec, const int row, const int len = Dim, const int start_col = 0)
     {

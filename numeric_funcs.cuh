@@ -162,8 +162,8 @@ __device__ vector lu_solve(const lu_matrices<T,N>& lu, const vector& b)
     return backward_substitution(lu.U, y);
 }
 
-template<signed_number T, int N, typename matrix = Matrix<T,N>, typename vector = VectorND<T,N>>
-__device__ vector lu_solve(const matrix& A, const vector& b)
+template<signed_number T, int N>
+__device__ VectorND<T,N> lu_solve(const Matrix<T,N>& A, const VectorND<T,N>& b)
 {
     return lu_solve(lu_decomp<T,N>(A), b);
 }

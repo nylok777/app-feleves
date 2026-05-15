@@ -26,5 +26,7 @@ set_target_properties(app_feleves PROPERTIES
 target_link_libraries(app_feleves m)
 
 add_executable(app_feleves_test test.cu)
+add_executable(parareal_test parareal_test.cu)
 
 target_link_libraries(app_feleves_test app_feleves GTest::gtest GTest::gtest_main)
+target_link_libraries(parareal_test app_feleves GTest::gtest GTest::gtest_main)
