@@ -4,6 +4,7 @@
 
 #ifndef APP_FELEVES_LDX_CUH
 #define APP_FELEVES_LDX_CUH
+#include "pk_types.cuh"
 #include "types.cuh"
 
 namespace ldx

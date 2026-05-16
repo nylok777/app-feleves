@@ -4,6 +4,7 @@
 
 #ifndef APP_FELEVES_NUMERIC_FUNCS_CUH
 #define APP_FELEVES_NUMERIC_FUNCS_CUH
+#include <cuda_runtime.h>
 #include "types.cuh"
 
 __host__ __device__ inline double3 operator*(const double3& a, double b)
@@ -34,18 +35,8 @@ __host__ __device__ inline double3 operator-(const double3& lhs, const double3& 
     return make_double3(lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z);
 }
 
-__host__ __device__ inline double3 d3abs(const double3& x)
-{
-    return make_double3(fabs(x.x), fabs(x.y), fabs(x.z));
-}
-
-__host__ __device__ inline double l2norm(const double3& vec)
-{
-    return fsqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z);
-}
-
 template<int N>
-__host__ __device__ DoubleND<N> dNabs(DoubleND<N> vec)
+__host__ __device__ DoubleND<N> vabs(DoubleND<N> vec)
 {
     for (int i = 0; i < N; ++i)
         if (vec[i] < 0.0) vec[i] *= -1.0;
@@ -58,7 +49,7 @@ __host__ __device__ double l2norm(const DoubleND<N>& vec)
     double sum = 0.0;
     for (int i = 0; i < N; ++i)
         sum += vec[i] * vec[i];
-    return fsqrt(sum);
+    return sqrt(sum);
 }
 
 template<number T, int N>
