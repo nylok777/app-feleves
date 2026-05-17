@@ -3,26 +3,23 @@
 //
 
 #include <gtest/gtest.h>
-#include "solvers.cuh"
 #include "numeric_funcs.cuh"
+#include "solvers.cuh"
 #include "solver_funcs.cuh"
 
-class NewtonRaphsonTest : public testing::Test
-{
+class NewtonRaphsonTest : public testing::Test {
 public:
-    struct f
-    {
+    struct f {
         __host__ __device__ double operator()(double x) const { return cos(x) - pow(x, 3.0); }
     };
-    struct df
-    {
+
+    struct df {
         __host__ __device__ double operator()(double x) const { return -sin(x) - 3.0 * pow(x, 2.0); }
     };
 
 protected:
-    NewtonRaphson<f, df> newton;
-
-    NewtonRaphsonTest() : newton(f{}, df{}, 1e-7, 100) {}
+    NewtonRaphson<1> newton;
+    NewtonRaphsonTest() : newton(1e-7, 100) {}
 };
 
 template<typename N>
@@ -33,20 +30,27 @@ __global__ void test_kernel_newton(N newton, double x, maybe<double>* y)
 
 TEST_F(NewtonRaphsonTest, Call)
 {
-    double x0 = 0.5;
+    constexpr double x0 = 0.5;
     maybe<double>* dev_y = nullptr;
-    cudaMalloc(&dev_y, sizeof(maybe<double>));
+
+    ASSERT_EQ(cudaMalloc(&dev_y, sizeof(maybe<double>)), cudaSuccess);
     test_kernel_newton<<<1, 1>>>(newton, x0, dev_y);
-    maybe<double>* y = new maybe<double>;
-    cudaMemcpy(y, dev_y, sizeof(maybe<double>), cudaMemcpyDeviceToHost);
+
+    auto* y = new maybe<double>;
+    if (!cudaMemcpy(y, dev_y, sizeof(maybe<double>), cudaMemcpyDeviceToHost)) {
+        delete y;
+        cudaFree(dev_y);
+        FAIL();
+    }
+
     EXPECT_TRUE(y->has_value());
-    std::cout << y->value_or(0.0) << '\n';
+    std::cout << y->value_or(std::numeric_limits<double>::infinity()) << '\n';
+
     delete y;
     cudaFree(dev_y);
 }
 
-struct LorenzSystem
-{
+struct LorenzSystem {
     __host__ __device__ double3 operator()(const double3& vy) const
     {
         constexpr double sigma = 10.0;
@@ -59,27 +63,30 @@ struct LorenzSystem
     }
 };
 
-struct LorenzJac
-{
-    __host__ __device__ Double3x3_Old operator()(const double3& vy) const
+struct LorenzJac {
+    __host__ __device__ Double3x3 operator()(const double3& vy) const
     {
         double data[9]
         {
-            -10.0, 10.0, 0,
-            28.0 - vy.z, -1, -vy.x,
-            vy.y, vy.x, -(8.0 / 3.0)
+            -10.0,
+            10.0,
+            0,
+            28.0 - vy.z,
+            -1,
+            -vy.x,
+            vy.y,
+            vy.x,
+            -(8.0 / 3.0)
         };
-        return Double3x3_Old{data};
+        return Double3x3{data};
     }
 };
 
-class NewtonRaphsonSystemTest : public testing::TestWithParam<std::pair<double3, double3>>
-{
+class NewtonRaphsonMultiDimTest : public testing::TestWithParam<std::pair<double3, double3>> {
 protected:
     static constexpr double errtol = 1e-10;
-    NewtonRaphson newton;
-
-    NewtonRaphsonSystemTest() : newton(errtol, 1000) {}
+    NewtonRaphson<3> newton;
+    NewtonRaphsonMultiDimTest() : newton(errtol, 1000) {}
 };
 
 template<typename NS, typename F, typename J>
@@ -88,7 +95,7 @@ __global__ void test_kernel_newton_system(NS newton, F f, J j, double3 x0, maybe
     *result = newton(x0, f, j);
 }
 
-TEST_P(NewtonRaphsonSystemTest, FindRoot)
+TEST_P(NewtonRaphsonMultiDimTest, FindRoot)
 {
     auto [x0, root] = GetParam();
     maybe<double3>* dev_result = nullptr;
@@ -110,23 +117,25 @@ TEST_P(NewtonRaphsonSystemTest, FindRoot)
     cudaFree(dev_result);
 }
 
-INSTANTIATE_TEST_SUITE_P(LorenzRoots,
-    NewtonRaphsonSystemTest,
+INSTANTIATE_TEST_SUITE_P(
+    LorenzRoots,
+    NewtonRaphsonMultiDimTest,
     testing::Values(std::make_pair(make_double3(1.0, 1.0, 1.0), make_double3(0., 0., 0.)),
         std::make_pair(make_double3(10., 10., 30.), make_double3(8.48528137, 8.48528137, 27.0)),
         std::make_pair(make_double3(-10., -10., 30.), make_double3(-8.48528137, -8.48528137, 27.0))));
 
-class BDFTest : public testing::Test
-{
+class BDFTest : public testing::Test {
 protected:
+    BDFTest();
     static constexpr double atol = 1e-4;
     static constexpr double save_interval = 0.02;
-    NewtonRaphson newton{atol, 3};
-    BackwardEuler<LorenzSystem, LorenzJac, NewtonRaphson> backward_euler{atol, 1e-4, save_interval, LorenzSystem{}, LorenzJac{},
-        newton};
-    BDF2Step<LorenzSystem, LorenzJac, NewtonRaphson> bdf2_stepper{atol, 1e-4, LorenzSystem{}, LorenzJac{},
-        NewtonRaphson{newton}};
+
 };
+
+BDFTest::BDFTest() :
+{
+
+}
 
 template<typename S>
 __global__ void test_kernel_bdf(S solver, double3 x0, double t_end, double3* y_out, size_t size, solver_status* status)
@@ -149,8 +158,7 @@ TEST_F(BDFTest, Order1)
     ASSERT_TRUE(status.finished);
 }
 
-struct DecayingSpiral
-{
+struct DecayingSpiral {
     __device__ Double3 operator()(const Double3& v) const
     {
         constexpr double lambda = 0.5;
@@ -158,15 +166,20 @@ struct DecayingSpiral
     }
 };
 
-struct DecayingSpiralJacobian
-{
+struct DecayingSpiralJacobian {
     __device__ Double3x3 operator()(const Double3& v) const
     {
         double data[9]
         {
-            0, -1, 0,
-            1, 0, 0,
-            0, 0, -0.5
+            0,
+            -1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            -0.5
         };
         return Double3x3{data};
     }
@@ -196,7 +209,7 @@ TEST_F(VectorOperationsTest, VectorAdd)
     EXPECT_EQ(double_vector, expected);
     auto vec2 = vec + Double3::make_sequence(10);
     auto vec3 = Double3::make_sequence(10) + vec;
-    vec += Double3{10,11,12};
+    vec += Double3{10, 11, 12};
     expected = Double3{11, 13, 15};
     EXPECT_EQ(vec2, expected);
     EXPECT_EQ(vec3, expected);

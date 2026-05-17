@@ -15,16 +15,17 @@ namespace detail
 {
 template<typename G, int N>
 __host__ __device__ int parareal_initial_solve(
-    const DoubleND<N>& y0,
+    const DoubleVec<N>& y0,
     const G& coarse_step,
-    DoubleND<N>* U,
+    DoubleVec<N>* U,
     const size_t size)
 {
-    using coarse_result = std::invoke_result_t<G, DoubleND<N>>;
+    using coarse_result = std::invoke_result_t<G, DoubleVec<N>>;
+
     // szekvenciálisan kell ezt a részt GPU-n is !!
     auto y = y0;
     for (size_t i = 0; i < size; ++i) {
-        if constexpr (std::same_as<coarse_result, maybe<DoubleND<N>>>) {
+        if constexpr (std::same_as<coarse_result, maybe<DoubleVec<N>>>) {
             auto y_maybe = coarse_step(y);
             if (!y_maybe.has_value()) return -2;
             y = y_maybe.value();
@@ -39,10 +40,10 @@ __host__ __device__ int parareal_initial_solve(
 
 template<typename F, int N>
 __device__ void parareal_fine_steps(
-    const DoubleND<N>& y0,
+    const DoubleVec<N>& y0,
     const F& fine_step,
-    DoubleND<N>* U_pred,
-    DoubleND<N>* U_f,
+    DoubleVec<N>* U_pred,
+    DoubleVec<N>* U_f,
     const size_t size)
 {
     const auto tid = blockDim.x * blockIdx.x + threadIdx.x;
@@ -56,12 +57,12 @@ __device__ void parareal_fine_steps(
 template<int N, typename G>
 __host__ __device__ int parareal_correction(
     const G& coarse_step,
-    DoubleND<N>* U_g,
-    DoubleND<N>* U_f,
-    DoubleND<N>* U_next,
+    DoubleVec<N>* U_g,
+    DoubleVec<N>* U_f,
+    DoubleVec<N>* U_next,
     const size_t size)
 {
-    using vector = DoubleND<N>;
+    using vector = DoubleVec<N>;
     using coarse_result = std::invoke_result_t<G, vector>;
 
     vector u = U_f[0]; // first element
@@ -89,8 +90,8 @@ __host__ __device__ int parareal_correction(
 
 template<int N>
 __host__ __device__ void parareal_check_convergence(
-    const DoubleND<N>* U_prev,
-    const DoubleND<N>* U,
+    const DoubleVec<N>* U_prev,
+    const DoubleVec<N>* U,
     const size_t size,
     const double errtol,
     bool* converged)
@@ -119,50 +120,60 @@ __device__ inline int dev_parareal_exit_flag = 0;
 
 template<typename G, typename F, int N>
 __global__ void parareal_loop(
-    const DoubleND<N> y0,
+    const DoubleVec<N> y0,
     G coarse_step,
     F fine_step,
     const double errtol,
-    DoubleND<N>* U_prev,
-    DoubleND<N>* U,
-    DoubleND<N>* U_next,
+    DoubleVec<N>* U_prev,
+    DoubleVec<N>* U,
+    DoubleVec<N>* U_next,
     const size_t size,
     bool* converged)
 {
+    __shared__ bool shr_converged;
     const auto grid = cg::this_grid();
 
     const auto tx = threadIdx.x;
     const auto tid = blockDim.x * blockIdx.x + tx;
 
     if (tid == 0) {
-        *converged = false;
+        *converged = true;
+        shr_converged = false;
         // printf("%s", "at initial solve");
         detail::parareal_initial_solve(y0, coarse_step, U_prev, size);
         // printf("%s", "after initial solve\n");
     }
+    else if (tx == 0) {
+        shr_converged = false;
+    }
     grid.sync();
 
-    while (!*converged) {
-        grid.sync();
-        if (tid == 0) *converged = true;
-        grid.sync();
+    // ReSharper disable once CppLocalVariableMightNotBeInitialized
+    while (!shr_converged) {
         if (tid < size) {
             // if (tid == 0) printf("%s", "at fine steps");
             detail::parareal_fine_steps(y0, fine_step, U_prev, U, size);
         }
         grid.sync();
+
         if (tid == 0) {
             // printf("%s", "at correction");
             detail::parareal_correction(coarse_step, U_prev, U, U_next, size);
             // printf("%s", "after correction\n");
         }
         grid.sync();
+
         detail::parareal_check_convergence(U_prev, U_next, size, errtol, converged);
         grid.sync();
+
         if (!*converged) {
             auto* tmp = U_prev;
             U_prev = U_next;
             U_next = tmp;
+            if (tid == 0) *converged = true;
+        }
+        else if (tx == 0) {
+            shr_converged = true;
         }
         grid.sync();
     }

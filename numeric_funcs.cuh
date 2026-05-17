@@ -7,44 +7,22 @@
 #include <cuda_runtime.h>
 #include "types.cuh"
 
-__host__ __device__ inline double3 operator*(const double3& a, double b)
-{
-    return make_double3(a.x * b, a.y * b, a.z * b);
-}
-
-__host__ __device__ inline double3 operator*(double n, const double3& v)
-{
-    return v * n;
-}
-
-__host__ __device__ inline double3& operator+=(double3& lhs, const double3& rhs)
-{
-    lhs.x += rhs.x;
-    lhs.y += rhs.y;
-    lhs.z += rhs.z;
-    return lhs;
-}
-
-__host__ __device__ inline double3 operator+(double3 lhs, const double3& rhs)
-{
-    return lhs += rhs;
-}
-
-__host__ __device__ inline double3 operator-(const double3& lhs, const double3& rhs)
-{
-    return make_double3(lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z);
-}
-
-template<int N>
-__host__ __device__ DoubleND<N> vabs(DoubleND<N> vec)
+template<signed_number T, int N> __host__ __device__ Vector<T,N> vabs(Vector<T,N> vec)
 {
     for (int i = 0; i < N; ++i)
-        if (vec[i] < 0.0) vec[i] *= -1.0;
+        if (vec[i] < T{0}) vec[i] *= T{-1};
     return vec;
 }
 
-template<int N>
-__host__ __device__ double l2norm(const DoubleND<N>& vec)
+template<real_number Real, int N> __host__ __device__ Real l2norm(const Vector<Real,N>& vec)
+{
+    Real sum{};
+    for (int i = 0; i < N; ++i)
+        sum += vec[i] * vec[i];
+    return sqrt(sum);
+}
+
+template<int N> __host__ __device__ double l2norm(const DoubleVec<N>& vec)
 {
     double sum = 0.0;
     for (int i = 0; i < N; ++i)
@@ -52,57 +30,60 @@ __host__ __device__ double l2norm(const DoubleND<N>& vec)
     return sqrt(sum);
 }
 
-template<number T, int N>
-__device__ VectorND<T,N> forward_substitution(const Matrix<T,N>& L, const VectorND<T,N>& b)
+template<signed_number T, int N>
+__host__ __device__ Vector<T, N> forward_substitution(const Matrix<T, N>& L, const Vector<T, N>& b)
 {
-    VectorND<T,N> y{};
+    Vector<T, N> y{};
     for (int i = 0; i < N; ++i) {
-        T sum = Matrix<T,N>::dot(L, y, i, i);
-        y[i] = (b[i] - sum) / L(i,i);
+        T sum = Matrix<T, N>::dot(L, y, i, i);
+        y[i] = (b[i] - sum) / L(i, i);
     }
     return y;
 }
 
-template<number T, int N>
-__device__ VectorND<T,N> forward_substitution(
-    const Matrix<T,N>& L,
-    const VectorND<T,N>& b,
-    const VectorND<int,N>& pivot)
+template<signed_number T, int N>
+__host__ __device__ Vector<T, N> forward_substitution(
+    const Matrix<T, N>& L,
+    const Vector<T, N>& b,
+    const Vector<int, N>& pivot)
 {
-    VectorND<T,N> y{};
+    Vector<T, N> y{};
     for (int i = 0; i < N; ++i) {
-        T sum = Matrix<T,N>::dot(L, y, i, i);
+        T sum = Matrix<T, N>::dot(L, y, i, i);
         y[i] = (b[pivot[i]] - sum) / L(i, i);
     }
     return y;
 }
 
-template<number T, int N>
-__device__ VectorND<T,N> backward_substitution(const Matrix<T,N>& U, const VectorND<T,N>& y)
+template<signed_number T, int N>
+__host__ __device__ Vector<T, N> backward_substitution(const Matrix<T, N>& U, const Vector<T, N>& y)
 {
-    VectorND<T,N> x{};
+    Vector<T, N> x{};
     for (int i = N - 1; i >= 0; --i) {
         T sum{0};
         if (int len = N - 1 - i; len > 0)
-            sum = Matrix<T,N>::dot(U, x, i, len, i+1);
-        x[i] = (y[i] - sum) / U(i,i);
+            sum = Matrix<T, N>::dot(U, x, i, len, i + 1);
+        x[i] = (y[i] - sum) / U(i, i);
     }
     return x;
 }
 
-template<number T, int N>
-struct lu_matrices {
-    Matrix<T,N> L;
-    Matrix<T,N> U;
-    VectorND<int,N> pivot;
+template<signed_number T, int N>
+struct lu_result {
+    Matrix<T, N> L;
+    Matrix<T, N> U;
+    Vector<int, N> pivot;
 };
 
-template<number T, int N, typename vector = VectorND<T,N>, typename matrix = Matrix<T,N>>
-__device__ lu_matrices<T,N> lu_decomp(const matrix& A)
+template<signed_number T, int N>
+__host__ __device__ lu_result<T, N> lu_decomp(const Matrix<T,N>& A)
 {
-    using intvector = VectorND<int,N>;
+    using vector = Vector<T,N>;
+    using matrix = Matrix<T,N>;
+    using int_vector = Vector<int, N>;
+
     matrix L = matrix::make_identity();
-    intvector p = intvector::make_sequence();
+    int_vector p = int_vector::make_sequence();
     matrix U{};
     vector u_col{};
 
@@ -146,29 +127,32 @@ __device__ lu_matrices<T,N> lu_decomp(const matrix& A)
     return {std::move(L), std::move(U), std::move(p)};
 }
 
-template<number T, int N, typename vector = VectorND<T,N>>
-__device__ vector lu_solve(const lu_matrices<T,N>& lu, const vector& b)
+template<signed_number T, int N>
+__host__ __device__ Vector<T, N> lu_solve(const lu_result<T, N>& lu, const Vector<T, N>& b)
 {
     auto y = forward_substitution(lu.L, b, lu.pivot);
     return backward_substitution(lu.U, y);
 }
 
 template<signed_number T, int N>
-__device__ VectorND<T,N> lu_solve(const Matrix<T,N>& A, const VectorND<T,N>& b)
+__host__ __device__ Vector<T, N> lu_solve(const Matrix<T, N>& A, const Vector<T, N>& b)
 {
-    return lu_solve(lu_decomp<T,N>(A), b);
+    return lu_solve(lu_decomp<T, N>(A), b);
 }
 
-__device__ inline double3 linear_interpolation(const double3& y, const double3& y_next, double t, double t_next, double t_save)
+template<int N>
+__host__ __device__ constexpr DoubleVec<N> linear_interpolation(
+    const DoubleVec<N>& y, const DoubleVec<N>& y_next, const double t, const double t_next, const double t_save)
 {
     double theta = t_next == t ? 1.0 : (t_save - t) / (t_next - t);
     return y + ((y_next - y) * theta);
 }
 
-__device__ inline double3 quadratic_interpolation(
-    const double3& y0, const double3& y1, const double3& y2,
-    double t0, double t1, double t2,
-    double t_out)
+template<int N>
+__host__ __device__ constexpr DoubleVec<N> quadratic_interpolation(
+    const DoubleVec<N>& y0, const DoubleVec<N>& y1, const DoubleVec<N>& y2,
+    const double t0, const double t1, const double t2,
+    const double t_out)
 {
     // Calculate the Lagrange basis weights
     double w0 = ((t_out - t1) * (t_out - t2)) / ((t0 - t1) * (t0 - t2));

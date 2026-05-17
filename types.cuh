@@ -31,30 +31,30 @@
 template<typename T> using maybe = cuda::std::optional<T>;
 template<typename T> concept number = std::integral<T> || std::floating_point<T>;
 template<typename T> concept signed_number = std::signed_integral<T> || std::floating_point<T>;
+template<typename T> concept real_number = std::floating_point<T>;
 
 template<number T, int Dim>
-class VectorND {
+class Vector {
     T m_data[Dim]{T{0}};
 
 public:
-    VectorND() = default;
-    __host__ __device__ explicit VectorND(T data[Dim]) : m_data() { memcpy(m_data, data, Dim * sizeof(T)); }
+    Vector() = default;
+    __host__ __device__ explicit Vector(T x) : m_data(x) {}
+    __host__ __device__ explicit Vector(T data[Dim]) : m_data() { memcpy(m_data, data, Dim * sizeof(T)); }
+    template<number... U> __host__ __device__ explicit Vector(U...items) : m_data(items...) {}
 
-    template<number... U>
-    __host__ __device__ explicit VectorND(U...items) : m_data(items...) {}
-
-    __host__ __device__ static VectorND make_sequence(T start = T{0})
+    __host__ __device__ static Vector make_sequence(T start = T{0})
     {
         T x[Dim];
         for (int i = 0; i < Dim; ++i) {
             x[i] = T{start++};
         }
-        return VectorND{x};
+        return Vector{x};
     }
 
     __host__ __device__ T& operator[](int i) { return m_data[i]; }
     __host__ __device__ T operator[](int i) const { return m_data[i]; }
-    __host__ __device__ static T dot(VectorND a, const VectorND& b, int len = Dim)
+    __host__ __device__ static T dot(Vector a, const Vector& b, int len = Dim)
     {
         T sum{0};
         for (int i = 0; i < len; ++i) {
@@ -63,29 +63,29 @@ public:
         return sum;
     }
 
-    DEF_TENSOR_CMP_OP(VectorND, Dim, operator<, <)
-    DEF_TENSOR_CMP_OP(VectorND, Dim, operator>, >)
-    DEF_TENSOR_CMP_OP(VectorND, Dim, operator==, ==)
+    DEF_TENSOR_CMP_OP(Vector, Dim, operator<, <)
+    DEF_TENSOR_CMP_OP(Vector, Dim, operator>, >)
+    DEF_TENSOR_CMP_OP(Vector, Dim, operator==, ==)
 
-    DEF_TENSOR_SCALAR_INPLACE_OP(VectorND, operator+=, +=)
-    DEF_TENSOR_SCALAR_INPLACE_OP(VectorND, operator-=, -=)
-    DEF_TENSOR_SCALAR_INPLACE_OP(VectorND, operator*=, *=)
-    DEF_TENSOR_SCALAR_INPLACE_OP(VectorND, operator/=, /=)
-    DEF_TENSOR_SCALAR_OP(VectorND, operator+, +=)
-    DEF_TENSOR_SCALAR_OP(VectorND, operator-, -=)
-    DEF_TENSOR_SCALAR_OP(VectorND, operator*, *=)
-    DEF_TENSOR_SCALAR_OP(VectorND, operator/, /=)
+    DEF_TENSOR_SCALAR_INPLACE_OP(Vector, operator+=, +=)
+    DEF_TENSOR_SCALAR_INPLACE_OP(Vector, operator-=, -=)
+    DEF_TENSOR_SCALAR_INPLACE_OP(Vector, operator*=, *=)
+    DEF_TENSOR_SCALAR_INPLACE_OP(Vector, operator/=, /=)
+    DEF_TENSOR_SCALAR_OP(Vector, operator+, +=)
+    DEF_TENSOR_SCALAR_OP(Vector, operator-, -=)
+    DEF_TENSOR_SCALAR_OP(Vector, operator*, *=)
+    DEF_TENSOR_SCALAR_OP(Vector, operator/, /=)
 
-    DEF_TENSOR_TENSOR_INPLACE_OP(VectorND, Dim, operator+=, +=)
-    DEF_TENSOR_TENSOR_INPLACE_OP(VectorND, Dim, operator-=, -=)
-    DEF_TENSOR_TENSOR_INPLACE_OP(VectorND, Dim, operator*=, *=)
-    DEF_TENSOR_TENSOR_INPLACE_OP(VectorND, Dim, operator/=, /=)
-    DEF_TENSOR_TENSOR_OP(VectorND, operator+, +=)
-    DEF_TENSOR_TENSOR_OP(VectorND, operator-, -=)
-    DEF_TENSOR_TENSOR_OP(VectorND, operator*, *=)
-    DEF_TENSOR_TENSOR_OP(VectorND, operator/, /=)
+    DEF_TENSOR_TENSOR_INPLACE_OP(Vector, Dim, operator+=, +=)
+    DEF_TENSOR_TENSOR_INPLACE_OP(Vector, Dim, operator-=, -=)
+    DEF_TENSOR_TENSOR_INPLACE_OP(Vector, Dim, operator*=, *=)
+    DEF_TENSOR_TENSOR_INPLACE_OP(Vector, Dim, operator/=, /=)
+    DEF_TENSOR_TENSOR_OP(Vector, operator+, +=)
+    DEF_TENSOR_TENSOR_OP(Vector, operator-, -=)
+    DEF_TENSOR_TENSOR_OP(Vector, operator*, *=)
+    DEF_TENSOR_TENSOR_OP(Vector, operator/, /=)
 
-    friend __host__ __device__ VectorND operator-(VectorND vec) { return vec *= T{-1}; }
+    friend __host__ __device__ Vector operator-(Vector vec) { return vec *= T{-1}; }
 };
 
 template<number T, int Dim>
@@ -121,15 +121,15 @@ public:
 
     __host__ __device__ T& operator()(int i, int j) { return m_data[(i * Dim) + j]; }
     __host__ __device__ T operator()(int i, int j) const { return m_data[(i * Dim) + j]; }
-    __host__ __device__ VectorND<T, Dim> col(int j, int num_rows = Dim) const
+    __host__ __device__ Vector<T, Dim> col(int j, int num_rows = Dim) const
     {
-        VectorND<T, Dim> vec{};
+        Vector<T, Dim> vec{};
         for (int i = 0; i < num_rows; ++i)
             vec[i] = (*this)(i, j);
         return vec;
     }
 
-    __host__ __device__ static T dot(Matrix mat, const VectorND<T, Dim>& vec, const int row, const int len = Dim, const int start_col = 0)
+    __host__ __device__ static T dot(Matrix mat, const Vector<T, Dim>& vec, const int row, const int len = Dim, const int start_col = 0)
     {
         T sum{0};
         for (int i = start_col; i < len; ++i) {
@@ -154,13 +154,13 @@ public:
 };
 
 template<int Dim> using DoubleMat = Matrix<double, Dim>;
-template<int Dim> using DoubleND = VectorND<double, Dim>;
-using Double3 = VectorND<double, 3>;
+template<int Dim> using DoubleVec = Vector<double, Dim>;
+using Double3 = Vector<double, 3>;
 using Double3x3 = DoubleMat<3>;
 
 template<int N>
 struct step_result {
-    DoubleND<N> y;
+    DoubleVec<N> y;
     double t;
 };
 
