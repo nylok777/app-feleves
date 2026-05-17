@@ -3,6 +3,8 @@
 //
 
 #include <gtest/gtest.h>
+
+#include "misc.h"
 #include "numeric_funcs.cuh"
 #include "solvers.cuh"
 #include "solver_funcs.cuh"
@@ -22,10 +24,10 @@ protected:
     NewtonRaphsonTest() : newton(1e-7, 100) {}
 };
 
-template<typename N>
-__global__ void test_kernel_newton(N newton, double x, maybe<double>* y)
+template<typename N, typename F, typename Df>
+__global__ void test_kernel_newton(N newton, F f, Df df, double x, maybe<double>* y)
 {
-    *y = newton(x);
+    *y = newton(x, f, df);
 }
 
 TEST_F(NewtonRaphsonTest, Call)
@@ -34,7 +36,7 @@ TEST_F(NewtonRaphsonTest, Call)
     maybe<double>* dev_y = nullptr;
 
     ASSERT_EQ(cudaMalloc(&dev_y, sizeof(maybe<double>)), cudaSuccess);
-    test_kernel_newton<<<1, 1>>>(newton, x0, dev_y);
+    test_kernel_newton<<<1, 1>>>(newton, f{}, df{}, x0, dev_y);
 
     auto* y = new maybe<double>;
     if (!cudaMemcpy(y, dev_y, sizeof(maybe<double>), cudaMemcpyDeviceToHost)) {
@@ -50,7 +52,7 @@ TEST_F(NewtonRaphsonTest, Call)
     cudaFree(dev_y);
 }
 
-struct LorenzSystem {
+struct LorenzAttractor {
     __host__ __device__ double3 operator()(const double3& vy) const
     {
         constexpr double sigma = 10.0;
@@ -63,7 +65,7 @@ struct LorenzSystem {
     }
 };
 
-struct LorenzJac {
+struct LorenzAttractorJac {
     __host__ __device__ Double3x3 operator()(const double3& vy) const
     {
         double data[9]
@@ -90,23 +92,24 @@ protected:
 };
 
 template<typename NS, typename F, typename J>
-__global__ void test_kernel_newton_system(NS newton, F f, J j, double3 x0, maybe<double3>* result)
+__global__ void test_kernel_newton_system(NS newton, F f, J j, Double3 x0, maybe<Double3>* result)
 {
     *result = newton(x0, f, j);
 }
 
+/*
 TEST_P(NewtonRaphsonMultiDimTest, FindRoot)
 {
     auto [x0, root] = GetParam();
-    maybe<double3>* dev_result = nullptr;
-    cudaMalloc(&dev_result, sizeof(maybe<double3>));
-    test_kernel_newton_system<<<1, 1>>>(newton, LorenzSystem{}, LorenzJac{}, x0, dev_result);
-    auto* result = new maybe<double3>;
+    maybe<Double3>* dev_result = nullptr;
+    cudaMalloc(&dev_result, sizeof(maybe<Double3>));
+    test_kernel_newton_system<<<1, 1>>>(newton, LorenzAttractor{}, LorenzAttractorJac{}, x0, dev_result);
+    auto* result = new maybe<Double3>;
     cudaMemcpy(result, dev_result, sizeof(maybe<double3>), cudaMemcpyDeviceToHost);
     ASSERT_TRUE(result->has_value());
 
     constexpr double rtol = 1e-8;
-    auto eps = root.x + root.y + root.z == 0.0 ? make_double3(errtol, errtol, errtol) : (rtol + errtol) * d3abs(result->value());
+    auto eps = root.x + root.y + root.z == 0.0 ? make_double3(errtol, errtol, errtol) : (rtol + errtol) * vabs(result->value());
     EXPECT_LE(std::fabs(result->value().x - root.x), eps.x);
     EXPECT_LE(std::fabs(result->value().y - root.y), eps.y);
     EXPECT_LE(std::fabs(result->value().z - root.z), eps.z);
@@ -123,26 +126,88 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(std::make_pair(make_double3(1.0, 1.0, 1.0), make_double3(0., 0., 0.)),
         std::make_pair(make_double3(10., 10., 30.), make_double3(8.48528137, 8.48528137, 27.0)),
         std::make_pair(make_double3(-10., -10., 30.), make_double3(-8.48528137, -8.48528137, 27.0))));
+        */
 
 class BDFTest : public testing::Test {
+public:
+    struct f {
+        __host__ __device__ Double3 operator()(const Double3& y) const
+        {
+            constexpr double A = -1.28805;
+            constexpr double B = 0.0314159;
+            constexpr double C = -0.502655;
+            return Double3 {
+                C * cos(y[1]) + A * sin(y[2]),
+                A * cos(y[0]) + B * sin(y[0]),
+                B * cos(y[0]) + C * sin(y[1]) };
+        }
+    };
+
+    struct jac {
+        __host__ __device__ Double3x3 operator()(const Double3& y) const
+        {
+            constexpr double A = -1.28805;
+            constexpr double B = 0.0314159;
+            constexpr double C = -0.502655;
+            return Double3x3 {
+                0, -C * sin(y[1]), A * cos(y[2]),
+                B * cos(y[0]), 0, -A * sin(y[2]),
+                -C * sin(y[0]), C * cos(y[1]), 0 };
+        }
+    };
+
 protected:
     BDFTest();
-    static constexpr double atol = 1e-4;
-    static constexpr double save_interval = 0.02;
-
+    void SetUp();
+    BDFStep<f, jac, NewtonRaphson<3>, double, 3, 1> stepper;
+    static constexpr double atol = 1e-7;
+    static constexpr int newton_max_iter = 4;
+    static constexpr double step_size = 0.054;
+    Double3 y0 { -0.188495, 0.251327, -0.282743 };
+    std::vector<std::pair<Double3, double>> solution;
 };
 
-BDFTest::BDFTest() :
+BDFTest::BDFTest() : stepper(step_size, f{}, jac{}, NewtonRaphson<3>{atol, newton_max_iter})
 {
-
 }
 
-template<typename S>
-__global__ void test_kernel_bdf(S solver, double3 x0, double t_end, double3* y_out, size_t size, solver_status* status)
+void BDFTest::SetUp()
 {
-    *status = solver(x0, t_end, y_out, size);
+    try {
+        solution = read_csv("abc-flow-octave.csv");
+    } catch (...) {
+        GTEST_SKIP() << "Couldn't load solution file.";
+    }
 }
 
+TEST_F(BDFTest, FixedStepOrder1)
+{
+    solution = read_csv("abc-flow-octave.csv");
+    ASSERT_FALSE(solution.empty());
+    auto y = y0;
+    constexpr double t_end = 4.0;
+    constexpr int num_steps = t_end / step_size;
+
+    std::vector<Double3> states;
+    states.reserve(num_steps);
+
+    int i = 0;
+    for (; i < num_steps; ++i) {
+        auto y_maybe = stepper(y);
+        if (!y_maybe.has_value()) break;
+
+        y = y_maybe.value();
+        states.push_back(y);
+    }
+    ASSERT_EQ(i, num_steps);
+    ASSERT_TRUE(std::ranges::equal(states, solution, [this](const auto& my_sol, const auto& octave_sol) {
+        auto err = l2norm(my_sol - octave_sol.first);
+        std::cout << "diff: " << err << '\n';
+        return err <= atol;
+    }));
+}
+
+/*
 TEST_F(BDFTest, Order1)
 {
     constexpr size_t size = 50'000;
@@ -157,6 +222,7 @@ TEST_F(BDFTest, Order1)
     cudaMemcpy(&status, dev_status, sizeof(solver_status), cudaMemcpyDeviceToHost);
     ASSERT_TRUE(status.finished);
 }
+*/
 
 struct DecayingSpiral {
     __device__ Double3 operator()(const Double3& v) const

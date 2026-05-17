@@ -15,7 +15,9 @@ add_library(app_feleves STATIC
         ldx.cu
         solver_funcs.cuh
         pk_types.cuh
-        parareal.cuh)
+        parareal.cuh
+        misc.h
+        misc.cu)
 
 target_compile_options(app_feleves PUBLIC
         "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:--ptxas-options=-v>"

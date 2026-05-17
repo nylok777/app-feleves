@@ -42,7 +42,20 @@ public:
     __host__ __device__ explicit Vector(T x) : m_data(x) {}
     __host__ __device__ explicit Vector(T data[Dim]) : m_data() { memcpy(m_data, data, Dim * sizeof(T)); }
     template<number... U> __host__ __device__ explicit Vector(U...items) : m_data(items...) {}
+    __host__ static Vector* make_on_device(T data[Dim])
+    {
+        Vector* dev_vector = nullptr;
+        if (auto err = cudaMalloc(&dev_vector, sizeof(Vector)); err != cudaSuccess)
+            throw std::runtime_error{cudaGetErrorString(err)};
 
+        Vector vector{data};
+        if (auto err = cudaMemcpy(dev_vector, &vector, sizeof(Vector)); err != cudaSuccess) {
+            cudaFree(dev_vector);
+            throw std::runtime_error{cudaGetErrorString(err)};
+        }
+
+        return dev_vector;
+    }
     __host__ __device__ static Vector make_sequence(T start = T{0})
     {
         T x[Dim];

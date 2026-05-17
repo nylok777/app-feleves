@@ -94,7 +94,7 @@ protected:
     static constexpr int SUBSTEPS = 32;
     static constexpr double ERRTOL = 1e-6;
 
-    void SetUp() override
+    void SetUp()
     {
         int dev = 0;
         cudaGetDevice(&dev);

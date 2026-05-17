@@ -85,20 +85,7 @@ private:
     Real m_step_size;
 };
 
-template<typename F, typename J, typename R, real_number Real, int N>
-class BDFStep : public BDFFixedStepBase<F,J,R,Real> {
-    using Base = BDFFixedStepBase<F,J,R,Real>;
-public:
-    __host__ __device__ BDFStep(Real step_size, F system_fn, J jacobian_fn, R root_solver)
-        : Base(step_size, system_fn, jacobian_fn, root_solver) {}
-
-    __host__ __device__ maybe<Vector<Real,N>> operator()(const Vector<Real,N>& y) const
-    {
-        return bdf_step(y, Base::step_size(), Base::system(), Base::jacobian(), Base::root_finder());
-    }
-};
-
-template<typename F, typename J, typename R, real_number Real, int N, int O> requires (O >= 2 && O < 7)
+template<typename F, typename J, typename R, real_number Real, int N, int O> requires (O >= 1 && O < 7)
 class BDFStep : public BDFFixedStepBase<F,J,R,Real> {
     using Base = BDFFixedStepBase<F,J,R,Real>;
     using vector = Vector<Real,N>;
@@ -135,6 +122,19 @@ public:
         }
 
         return bdf_step(Y, Base::step_size(), Base::system(), Base::jacobian(), Base::root_finder());
+    }
+};
+
+template<typename F, typename J, typename R, real_number Real, int N>
+class BDFStep<F,J,R,Real,N,1> : public BDFFixedStepBase<F,J,R,Real> {
+    using Base = BDFFixedStepBase<F,J,R,Real>;
+public:
+    __host__ __device__ BDFStep(Real step_size, F system_fn, J jacobian_fn, R root_solver)
+        : Base(step_size, system_fn, jacobian_fn, root_solver) {}
+
+    __host__ __device__ maybe<Vector<Real,N>> operator()(const Vector<Real,N>& y) const
+    {
+        return bdf_step(y, Base::step_size(), Base::system(), Base::jacobian(), Base::root_finder());
     }
 };
 
