@@ -26,9 +26,12 @@ __host__ __device__ maybe<DoubleVec<N>> newton_raphson(
         DoubleVec<N> fx = system_fn(y);
         DoubleMat<N> jx = jac_fn(y);
         auto fx_neg = -fx;
-        auto dx = lu_solve<double,3>(jx, fx_neg);
-        y += dx;
-        if (l2norm(dx) < tolerance) {
+        auto dx_maybe = lu_solve<double,N>(jx, fx_neg);
+        if (!dx_maybe.has_value())
+            dx_maybe = lu_solve<double,N>(jx + (1e-8 * DoubleMat<N>::make_identity()), fx_neg);
+        if (!dx_maybe.has_value()) return {};
+        y += dx_maybe.value();
+        if (l2norm(dx_maybe.value()) < tolerance) {
             return y;
         }
     }

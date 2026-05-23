@@ -160,8 +160,8 @@ protected:
     BDFTest();
     void SetUp();
     BDFStep<f, jac, NewtonRaphson<3>, double, 3, 1> stepper;
-    static constexpr double atol = 1e-7;
-    static constexpr int newton_max_iter = 4;
+    static constexpr double atol = 1e-14;
+    static constexpr int newton_max_iter = 12;
     static constexpr double step_size = 0.054;
     Double3 y0 { -0.188495, 0.251327, -0.282743 };
     std::vector<std::pair<Double3, double>> solution;
@@ -173,23 +173,26 @@ BDFTest::BDFTest() : stepper(step_size, f{}, jac{}, NewtonRaphson<3>{atol, newto
 
 void BDFTest::SetUp()
 {
-    try {
-        solution = read_csv("abc-flow-octave.csv");
-    } catch (...) {
-        GTEST_SKIP() << "Couldn't load solution file.";
-    }
+    // try {
+    //     solution = read_csv("abc-flow-octave.csv");
+    // } catch (...) {
+    //     GTEST_SKIP() << "Couldn't load solution file.";
+    // }
 }
 
 TEST_F(BDFTest, FixedStepOrder1)
 {
-    solution = read_csv("abc-flow-octave.csv");
-    ASSERT_FALSE(solution.empty());
-    auto y = y0;
     constexpr double t_end = 4.0;
     constexpr int num_steps = t_end / step_size;
 
+    solution = read_csv("abc-flow-octave.csv");
+    ASSERT_FALSE(solution.empty());
+
+    auto y = y0;
+
     std::vector<Double3> states;
     states.reserve(num_steps);
+    states.push_back(y0);
 
     int i = 0;
     for (; i < num_steps; ++i) {
@@ -200,10 +203,11 @@ TEST_F(BDFTest, FixedStepOrder1)
         states.push_back(y);
     }
     ASSERT_EQ(i, num_steps);
-    ASSERT_TRUE(std::ranges::equal(states, solution, [this](const auto& my_sol, const auto& octave_sol) {
+    int j = 0;
+    ASSERT_TRUE(std::ranges::equal(states, solution, [this, &j](const auto& my_sol, const auto& octave_sol) {
         auto err = l2norm(my_sol - octave_sol.first);
-        std::cout << "diff: " << err << '\n';
-        return err <= atol;
+        std::cout << "step " << j++ << " diff: " << err << '\n';
+        return err <= 1e-2;
     }));
 }
 

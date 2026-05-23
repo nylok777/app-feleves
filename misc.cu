@@ -10,10 +10,9 @@
 #include <numeric>
 
 
-__host__ std::vector<std::pair<Double3, double>> read_csv(const std::string& filename)
+__host__ std::vector<std::pair<Double3, double>> read_csv(const std::string& filename, unsigned num_lines)
 {
     using SolutionPair = std::pair<Double3, double>;
-    using RealVector = Double3;
 
     std::vector<SolutionPair> data;
     std::ifstream file(filename);
@@ -24,7 +23,10 @@ __host__ std::vector<std::pair<Double3, double>> read_csv(const std::string& fil
     }
 
     std::string line;
-    while (std::getline(file, line)) {
+
+    unsigned j = 0;
+
+    while (std::getline(file, line) && j <= num_lines) {
         if (line.empty()) continue;
 
         std::stringstream ss(line);
@@ -44,6 +46,7 @@ __host__ std::vector<std::pair<Double3, double>> read_csv(const std::string& fil
             Double3 v{sol};
             data.emplace_back(v, time);
         }
+        ++j;
     }
 
     return data;

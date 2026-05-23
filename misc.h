@@ -9,6 +9,6 @@
 
 #include "types.cuh"
 
-std::vector<std::pair<Double3, double>> read_csv(const std::string& filename);
+std::vector<std::pair<Double3, double>> read_csv(const std::string& filename, unsigned num_lines = ~0);
 
 #endif //APP_FELEVES_MISC_H

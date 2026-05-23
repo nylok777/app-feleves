@@ -76,7 +76,7 @@ struct lu_result {
 };
 
 template<signed_number T, int N>
-__host__ __device__ lu_result<T, N> lu_decomp(const Matrix<T,N>& A)
+__host__ __device__ maybe<lu_result<T, N>> lu_decomp(const Matrix<T,N>& A)
 {
     using vector = Vector<T,N>;
     using matrix = Matrix<T,N>;
@@ -102,7 +102,8 @@ __host__ __device__ lu_result<T, N> lu_decomp(const Matrix<T,N>& A)
             }
         }
 
-        //TODO: check singular if can't avoid
+        if (max_val < 1e-12)
+            return {};
 
         if (pivot_row != i) {
             cuda::std::swap(p[i], p[pivot_row]);
@@ -124,20 +125,18 @@ __host__ __device__ lu_result<T, N> lu_decomp(const Matrix<T,N>& A)
             }
         }
     }
-    return {std::move(L), std::move(U), std::move(p)};
+    return cuda::std::make_optional(lu_result<T,N>{std::move(L), std::move(U), std::move(p)});
 }
 
 template<signed_number T, int N>
-__host__ __device__ Vector<T, N> lu_solve(const lu_result<T, N>& lu, const Vector<T, N>& b)
+__host__ __device__ maybe<Vector<T, N>> lu_solve(const Matrix<T, N>& A, const Vector<T, N>& b)
 {
-    auto y = forward_substitution(lu.L, b, lu.pivot);
-    return backward_substitution(lu.U, y);
-}
-
-template<signed_number T, int N>
-__host__ __device__ Vector<T, N> lu_solve(const Matrix<T, N>& A, const Vector<T, N>& b)
-{
-    return lu_solve(lu_decomp<T, N>(A), b);
+    return lu_decomp(A)
+    .and_then([b](const auto& lu) {
+        auto y = forward_substitution(lu.L, b, lu.pivot);
+        return cuda::std::make_optional(backward_substitution(lu.U, y));
+    })
+    .or_else([]{ return maybe<Vector<T,N>>{}; });
 }
 
 template<int N>
